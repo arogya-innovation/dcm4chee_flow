@@ -891,7 +891,7 @@
       tbody.innerHTML = studies.map(s => {
         const mods = dv(s,'00080061') || dv(s,'00080060');
         const studyUid = dv(s,'0020000D');
-        const ohifUrl = 'http://localhost:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
+        const ohifUrl = 'http://178.236.185.39:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
         return `<tr>
           <td title="${dv(s,'00100010')}">${dv(s,'00100010')}</td>
           <td>${dv(s,'00100020')}</td>
