@@ -1,0 +1,14 @@
+{
+  "name": "mwl-order-app",
+  "version": "1.0.0",
+  "description": "MWL Order Entry for dcm4chee-arc",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "multer": "^2.1.1",
+    "node-fetch": "^2.7.0"
+  }
+}

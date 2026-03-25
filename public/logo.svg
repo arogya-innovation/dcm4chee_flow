@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 120" width="640" height="120">
+  <defs>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3B4899"/>
+      <stop offset="100%" style="stop-color:#4F5AA8"/>
+    </linearGradient>
+  </defs>
+  <!-- LifeRhythem text -->
+  <text x="10" y="72" font-family="'Inter','Segoe UI',Arial,sans-serif" font-size="68" font-weight="700" fill="url(#textGrad)">
+    <tspan>Life</tspan><tspan fill="#3B4899">R</tspan>
+  </text>
+  <!-- Heart with cross icon -->
+  <g transform="translate(228,12)">
+    <!-- Hands -->
+    <path d="M8,55 Q15,35 28,28 Q32,26 35,30 Q38,34 35,40 L28,52 Q25,56 28,58 L38,52" fill="#E8B298" stroke="#D4A088" stroke-width="1"/>
+    <path d="M72,55 Q65,35 52,28 Q48,26 45,30 Q42,34 45,40 L52,52 Q55,56 52,58 L42,52" fill="#E8B298" stroke="#D4A088" stroke-width="1"/>
+    <!-- Heart -->
+    <path d="M40,22 C40,10 28,4 22,12 C16,4 4,10 4,22 C4,36 40,52 40,52 C40,52 76,36 76,22 C76,10 64,4 58,12 C52,4 40,10 40,22Z" transform="translate(-1,-2) scale(0.65)" fill="#7B6FAD" opacity="0.85"/>
+    <!-- Cross on heart -->
+    <rect x="23" y="8" width="14" height="4" rx="2" fill="white" opacity="0.9"/>
+    <rect x="28" y="3" width="4" height="14" rx="2" fill="white" opacity="0.9"/>
+  </g>
+  <text x="310" y="72" font-family="'Inter','Segoe UI',Arial,sans-serif" font-size="68" font-weight="700" fill="url(#textGrad)">
+    <tspan>them</tspan>
+  </text>
+  <!-- Tagline -->
+  <line x1="10" y1="95" x2="160" y2="95" stroke="#7B82B5" stroke-width="1.5"/>
+  <!-- Heartbeat line -->
+  <polyline points="160,95 170,95 175,85 180,105 185,80 190,110 195,90 200,95 215,95" fill="none" stroke="#7B82B5" stroke-width="1.5"/>
+  <text x="225" y="100" font-family="'Inter','Segoe UI',Arial,sans-serif" font-size="18" font-style="italic" fill="#7B82B5">Citizen Wellness is our Priority</text>
+</svg>

@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LifeRhythem &mdash; PACS Worklist Manager</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f0f2f5; color: #1a1a2e; min-height: 100vh;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #2D3A7B 0%, #3B4899 40%, #4F5AA8 100%);
+      color: #fff; padding: 18px 0 0 0; text-align: center;
+      box-shadow: 0 4px 20px rgba(59,72,153,0.25);
+    }
+    .header-brand {
+      display: flex; align-items: center; justify-content: center; gap: 14px;
+    }
+    .header-brand img { height: 48px; }
+    .header-brand h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+    .header-brand .tagline { font-size: 0.72rem; color: #b8bde0; margin-top: 1px; font-style: italic; }
+    .header p.subtitle { font-size: 0.78rem; color: #b8bde0; margin-top: 4px; }
+
+    .tab-bar { display: flex; justify-content: center; margin-top: 16px; }
+    .tab-btn {
+      padding: 10px 28px; background: transparent; color: #a0aec0; border: none;
+      font-size: 0.86rem; font-weight: 600; font-family: inherit; cursor: pointer;
+      border-bottom: 3px solid transparent; transition: all 0.2s;
+    }
+    .tab-btn:hover { color: #e0e3f0; }
+    .tab-btn.active { color: #fff; border-bottom-color: #E8B298; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .container { max-width: 1100px; margin: 28px auto; padding: 0 20px; }
+
+    .card {
+      background: #fff; border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 6px 24px rgba(0,0,0,0.06);
+      padding: 28px; margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 1rem; font-weight: 600; color: #3B4899;
+      margin-bottom: 18px; padding-bottom: 10px; border-bottom: 2px solid #e8ecf1;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-title .icon {
+      width: 22px; height: 22px; background: linear-gradient(135deg, #3B4899, #4F5AA8); color: #fff; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700;
+    }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-group { display: flex; flex-direction: column; }
+    .form-group.full-width { grid-column: 1 / -1; }
+
+    label { font-size: 0.78rem; font-weight: 500; color: #4a5568; margin-bottom: 5px; }
+    label .required { color: #e53e3e; margin-left: 2px; }
+
+    input, select {
+      padding: 9px 12px; border: 1.5px solid #e2e8f0; border-radius: 10px;
+      font-size: 0.88rem; font-family: inherit; color: #1a1a2e; background: #fafbfc;
+      transition: all 0.2s ease; outline: none;
+    }
+    input:focus, select:focus {
+      border-color: #3B4899; background: #fff; box-shadow: 0 0 0 3px rgba(59,72,153,0.12);
+    }
+    select {
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%234a5568' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
+    }
+
+    .btn-row { display: flex; gap: 12px; justify-content: flex-end; margin-top: 8px; }
+    .btn {
+      padding: 10px 28px; border: none; border-radius: 10px;
+      font-size: 0.88rem; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: all 0.2s ease;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3B4899, #4F5AA8); color: #fff;
+      box-shadow: 0 4px 14px rgba(59,72,153,0.3);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,72,153,0.4); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: #e8ecf1; color: #4a5568; }
+    .btn-secondary:hover { background: #dde1e8; }
+    .btn-success {
+      background: linear-gradient(135deg, #276749, #38a169); color: #fff;
+      box-shadow: 0 4px 14px rgba(56,161,105,0.3);
+    }
+    .btn-success:hover { transform: translateY(-1px); }
+    .btn-success:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-sm { padding: 6px 16px; font-size: 0.8rem; border-radius: 8px; }
+
+    .toast {
+      position: fixed; top: 24px; right: 24px; padding: 14px 22px; border-radius: 12px;
+      font-size: 0.88rem; font-weight: 500; color: #fff; z-index: 1000;
+      transform: translateX(120%); transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+      max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .toast.show { transform: translateX(0); }
+    .toast.success { background: #38a169; }
+    .toast.error { background: #e53e3e; }
+
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-right: 8px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Tables */
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .panel-header h3 { font-size: 0.95rem; font-weight: 600; color: #3B4899; }
+
+    .data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+    .data-table thead th {
+      background: #f7f8fa; color: #4a5568; font-weight: 600; padding: 10px 12px;
+      text-align: left; border-bottom: 2px solid #e8ecf1; position: sticky; top: 0;
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .data-table tbody tr { cursor: pointer; transition: background 0.15s; }
+    .data-table tbody tr:hover { background: #eef0fa; }
+    .data-table tbody tr.selected { background: #dde0f5; box-shadow: inset 3px 0 0 #3B4899; }
+    .data-table tbody td {
+      padding: 10px 12px; border-bottom: 1px solid #f0f2f5;
+      max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .table-scroll { max-height: 320px; overflow-y: auto; border: 1px solid #e8ecf1; border-radius: 10px; }
+
+    .empty-state { text-align: center; color: #a0aec0; padding: 40px 20px; font-size: 0.88rem; }
+    .loading-row { text-align: center; padding: 30px; color: #a0aec0; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; }
+    .badge-blue { background: #dde0f5; color: #3B4899; }
+    .badge-green { background: #d1fae5; color: #065f46; }
+    .badge-gray { background: #e8ecf1; color: #4a5568; }
+
+    /* Upload zone */
+    .upload-zone {
+      border: 2px dashed #cbd5e0; border-radius: 14px; padding: 40px 20px;
+      text-align: center; cursor: pointer; transition: all 0.2s;
+      background: #fafbfc; position: relative;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: #3B4899; background: #eef0fa;
+    }
+    .upload-zone .uz-icon { font-size: 2.5rem; margin-bottom: 8px; }
+    .upload-zone .uz-title { font-size: 0.95rem; font-weight: 600; color: #1a1a2e; }
+    .upload-zone .uz-sub { font-size: 0.8rem; color: #a0aec0; margin-top: 4px; }
+
+    .file-list { margin-top: 14px; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px; background: #f7f8fa; border-radius: 8px; margin-bottom: 6px;
+      font-size: 0.82rem;
+    }
+    .file-item .fi-name { font-weight: 500; color: #1a1a2e; }
+    .file-item .fi-size { color: #a0aec0; font-size: 0.75rem; }
+    .file-item .fi-remove {
+      background: none; border: none; color: #e53e3e; cursor: pointer;
+      font-weight: 600; font-size: 0.85rem; padding: 2px 8px; border-radius: 4px;
+    }
+    .file-item .fi-remove:hover { background: #fee2e2; }
+
+    .upload-summary {
+      margin-top: 16px; display: flex; align-items: center;
+      justify-content: space-between; gap: 16px;
+    }
+    .upload-summary .info { font-size: 0.85rem; color: #4a5568; }
+    .upload-summary .info strong { color: #3B4899; }
+
+    .progress-bar-wrap {
+      width: 100%; height: 6px; background: #e8ecf1; border-radius: 3px;
+      margin-top: 12px; overflow: hidden; display: none;
+    }
+    .progress-bar-wrap.active { display: block; }
+    .progress-bar {
+      height: 100%; background: linear-gradient(90deg, #3B4899, #4F5AA8);
+      border-radius: 3px; transition: width 0.3s;
+    }
+
+    /* Report writing */
+    textarea {
+      padding: 10px 14px; border: 1.5px solid #e2e8f0; border-radius: 10px;
+      font-size: 0.88rem; font-family: inherit; color: #1a1a2e; background: #fafbfc;
+      transition: all 0.2s ease; outline: none; resize: vertical; min-height: 80px;
+    }
+    textarea:focus {
+      border-color: #3B4899; background: #fff; box-shadow: 0 0 0 3px rgba(59,72,153,0.12);
+    }
+    textarea { width: 100%; }
+    .report-header-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+      background: linear-gradient(135deg, #f0f1fa 0%, #f7f8fc 100%);
+      padding: 20px; border-radius: 12px; margin-bottom: 20px;
+      border: 1px solid #dde0f5;
+    }
+    .report-header-grid .rh-item { font-size: 0.82rem; }
+    .report-header-grid .rh-label {
+      font-weight: 600; color: #3B4899; font-size: 0.68rem;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .report-header-grid .rh-value { color: #1a1a2e; margin-top: 3px; font-weight: 500; }
+    .report-section-label {
+      font-size: 0.84rem; font-weight: 600; color: #3B4899;
+      margin-bottom: 6px; margin-top: 18px;
+      padding-left: 10px; border-left: 3px solid #4F5AA8;
+    }
+    .report-section-label:first-of-type { margin-top: 0; }
+    .saved-reports-list { margin-top: 16px; }
+    .saved-report-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; background: #f7f8fa; border-radius: 10px;
+      margin-bottom: 8px; cursor: pointer; transition: background 0.15s;
+    }
+    .saved-report-item:hover { background: #eef2ff; }
+    .saved-report-item .sr-patient { font-weight: 600; color: #1a1a2e; font-size: 0.88rem; }
+    .saved-report-item .sr-meta { font-size: 0.78rem; color: #718096; }
+    .saved-report-item .sr-date { font-size: 0.75rem; color: #a0aec0; }
+    .btn-outline {
+      background: transparent; border: 1.5px solid #3B4899; color: #3B4899;
+      padding: 8px 20px; border-radius: 10px; font-size: 0.84rem; font-weight: 600;
+      font-family: inherit; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-outline:hover { background: #3B4899; color: #fff; }
+    .print-only { display: none; }
+    @media print {
+      .header, .tab-bar, .toast, .btn, .btn-row, .btn-outline, .panel-header button,
+      .data-table, .table-scroll, #reportSelectCard, #savedReportsCard,
+      .form-grid, #saveReportBtn { display: none !important; }
+      .tab-content { display: none !important; }
+      #tab-report { display: block !important; }
+      #reportFormCard { display: block !important; }
+      .card { box-shadow: none; border: none; break-inside: avoid; padding: 0; }
+      .print-only { display: block !important; }
+      body { background: #fff; }
+      .report-header-grid { border: 1px solid #ddd; }
+      textarea { border: none; background: none; padding: 6px 0; min-height: auto; }
+      .report-section-label { color: #3B4899; }
+      .container { max-width: 100%; margin: 0; padding: 0 20px; }
+    }
+
+    @media (max-width: 640px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .card { padding: 18px; }
+      .container { padding: 0 12px; margin: 14px auto; }
+      .tab-btn { padding: 10px 14px; font-size: 0.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-brand">
+    <img src="/logo.svg" alt="LifeRhythem">
+    <div>
+      <!-- <h1>LifeRhythem <span style="font-weight:400;font-size:0.85rem;opacity:0.8">PACS Manager</span></h1>
+      <div class="tagline">Citizen Wellness is our Priority</div> -->
+    </div>
+  </div>
+  <!-- <p class="subtitle">dcm4chee-arc &mdash; Order &bull; Upload &bull; View &bull; Report</p> -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('create')">1. Create Order</button>
+    <button class="tab-btn" onclick="switchTab('upload')">2. Upload DICOM</button>
+    <button class="tab-btn" onclick="switchTab('studies')">3. View Studies</button>
+    <button class="tab-btn" onclick="switchTab('report')">4. Write Report</button>
+  </div>
+</div>
+
+<!-- ==================== TAB 1: CREATE ORDER ==================== -->
+<div class="tab-content active" id="tab-create">
+<div class="container" style="max-width:820px">
+  <form id="mwlForm">
+    <div class="card">
+      <div class="card-title"><span class="icon">1</span> Patient Information</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Patient ID <span class="required">*</span></label>
+          <input type="text" id="patientId" required placeholder="e.g. PAT-00123">
+        </div>
+        <div class="form-group">
+          <label>Patient Name <span class="required">*</span></label>
+          <input type="text" id="patientName" required placeholder="Last^First^Middle">
+        </div>
+        <div class="form-group">
+          <label>Date of Birth</label>
+          <input type="date" id="patientDob">
+        </div>
+        <div class="form-group">
+          <label>Sex</label>
+          <select id="patientSex">
+            <option value="">-- Select --</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="O">Other</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">2</span> Order / Procedure</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Accession Number <span class="required">*</span></label>
+          <input type="text" id="accessionNumber" required placeholder="e.g. ACC-2026-001">
+        </div>
+        <div class="form-group">
+          <label>Referring Physician</label>
+          <input type="text" id="referringPhysician" placeholder="Last^First">
+        </div>
+        <div class="form-group full-width">
+          <label>Requested Procedure Description <span class="required">*</span></label>
+          <input type="text" id="procedureDescription" required placeholder="e.g. CT Abdomen with Contrast">
+        </div>
+        <div class="form-group">
+          <label>Requested Procedure ID</label>
+          <input type="text" id="requestedProcedureId" placeholder="Auto-generated if empty">
+        </div>
+        <div class="form-group">
+          <label>Study Instance UID</label>
+          <input type="text" id="studyInstanceUid" placeholder="Auto-generated if empty">
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">3</span> Scheduled Procedure Step</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Modality <span class="required">*</span></label>
+          <select id="modality" required>
+            <option value="">-- Select Modality --</option>
+            <option value="CR">CR - Computed Radiography</option>
+            <option value="CT">CT - Computed Tomography</option>
+            <option value="DX">DX - Digital Radiography</option>
+            <option value="ES">ES - Endoscopy</option>
+            <option value="MG">MG - Mammography</option>
+            <option value="MR">MR - Magnetic Resonance</option>
+            <option value="NM">NM - Nuclear Medicine</option>
+            <option value="OT">OT - Other</option>
+            <option value="PT">PT - PET</option>
+            <option value="RF">RF - Radiofluoroscopy</option>
+            <option value="SC">SC - Secondary Capture</option>
+            <option value="US">US - Ultrasound</option>
+            <option value="XA">XA - X-Ray Angiography</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Scheduled Station AE Title</label>
+          <input type="text" id="scheduledAet" value="DCM4CHEE" placeholder="e.g. DCM4CHEE">
+        </div>
+        <div class="form-group">
+          <label>Scheduled Date <span class="required">*</span></label>
+          <input type="date" id="scheduledDate" required>
+        </div>
+        <div class="form-group">
+          <label>Scheduled Time</label>
+          <input type="time" id="scheduledTime" value="09:00">
+        </div>
+        <div class="form-group">
+          <label>Performing Physician</label>
+          <input type="text" id="performingPhysician" placeholder="Last^First">
+        </div>
+        <div class="form-group">
+          <label>Scheduled Procedure Step ID</label>
+          <input type="text" id="spsId" placeholder="Auto-generated if empty">
+        </div>
+        <div class="form-group full-width">
+          <label>Scheduled Procedure Step Description</label>
+          <input type="text" id="spsDescription" placeholder="e.g. CT Abdomen">
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+        <button type="submit" class="btn btn-primary" id="submitBtn">Submit Order</button>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<!-- ==================== TAB 2: UPLOAD DICOM ==================== -->
+<div class="tab-content" id="tab-upload">
+<div class="container" style="max-width:960px">
+
+  <!-- Step A: Select an order -->
+  <div class="card">
+    <div class="card-title"><span class="icon">A</span> Select MWL Order</div>
+    <div class="panel-header" style="margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#4a5568">Click a row to select the target order for your DICOM upload</span>
+      <button class="btn btn-sm btn-secondary" onclick="loadUploadOrders()">Refresh</button>
+    </div>
+    <div class="table-scroll" id="uploadOrdersWrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient</th>
+            <th>Patient ID</th>
+            <th>Accession #</th>
+            <th>Procedure</th>
+            <th>Modality</th>
+            <th>Sched. Date</th>
+            <th>Study UID</th>
+          </tr>
+        </thead>
+        <tbody id="uploadOrdersBody">
+          <tr><td colspan="7" class="loading-row">Click "Refresh" or switch to this tab...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Step B: Upload files -->
+  <div class="card" id="uploadCard">
+    <div class="card-title"><span class="icon">B</span> Upload DICOM Files</div>
+    <div id="selectedOrderInfo" style="font-size:0.85rem;margin-bottom:14px;padding:10px 14px;background:#fff3cd;border-radius:8px;color:#856404">
+      <strong>Select an order above first</strong>, then add files below.
+    </div>
+    <div style="margin-bottom:16px">
+      <button class="btn btn-primary btn-sm" id="createDicomBtn" onclick="createDicomFromOrder()" disabled style="opacity:0.5">Create Study in PACS from Order</button>
+      <span style="font-size:0.78rem;color:#718096;margin-left:10px" id="createDicomHint">Select an order first, then click to create a matching DICOM study in PACS</span>
+    </div>
+    <input type="file" id="dicomFileInput" multiple style="position:absolute;left:-9999px">
+    <div class="upload-zone" id="dropZone">
+      <div class="uz-icon">&#128193;</div>
+      <div class="uz-title">Drag & drop DICOM files here</div>
+      <div class="uz-sub">or click to browse &mdash; .dcm, .png, or any file</div>
+    </div>
+    <div class="file-list" id="fileList"></div>
+    <div class="progress-bar-wrap" id="progressWrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+    <div class="upload-summary" id="uploadSummary" style="display:none">
+      <div class="info" id="uploadInfo"></div>
+      <button class="btn btn-success" id="uploadBtn" onclick="uploadFiles()">Upload to PACS</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ==================== TAB 3: VIEW STUDIES ==================== -->
+<div class="tab-content" id="tab-studies">
+<div class="container">
+  <div class="card">
+    <div class="panel-header">
+      <h3>Studies in PACS</h3>
+      <button class="btn btn-sm btn-secondary" onclick="loadAllStudies()">Refresh</button>
+    </div>
+    <div class="table-scroll" style="max-height:600px">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient Name</th>
+            <th>Patient ID</th>
+            <th>Study Date</th>
+            <th>Description</th>
+            <th>Modality</th>
+            <th>Accession #</th>
+            <th># Series</th>
+            <th># Instances</th>
+            <th>OHIF</th>
+          </tr>
+        </thead>
+        <tbody id="allStudiesBody">
+          <tr><td colspan="9" class="loading-row">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ==================== TAB 4: WRITE REPORT ==================== -->
+<div class="tab-content" id="tab-report">
+<div class="container" style="max-width:960px">
+
+  <!-- Step: Select study/order -->
+  <div class="card" id="reportSelectCard">
+    <div class="card-title"><span class="icon">A</span> Select Study / Order</div>
+    <div class="panel-header" style="margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#4a5568">Click a study to pre-fill patient info for the report</span>
+      <button class="btn btn-sm btn-secondary" onclick="loadReportStudies()">Refresh</button>
+    </div>
+    <div class="table-scroll" style="max-height:240px">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient Name</th>
+            <th>Patient ID</th>
+            <th>Study Date</th>
+            <th>Description</th>
+            <th>Modality</th>
+            <th>Accession #</th>
+          </tr>
+        </thead>
+        <tbody id="reportStudiesBody">
+          <tr><td colspan="6" class="loading-row">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Report form -->
+  <div class="card" id="reportFormCard" style="border-top: 4px solid #3B4899;">
+    <!-- Print letterhead (visible only on print) -->
+    <div class="print-only" style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #3B4899">
+      <div style="font-size:1.8rem;font-weight:700;color:#3B4899;letter-spacing:-0.02em">LifeRhythem</div>
+      <div style="font-size:0.8rem;color:#7B82B5;font-style:italic">Citizen Wellness is our Priority</div>
+      <div style="font-size:1.1rem;font-weight:600;color:#3B4899;margin-top:10px;text-transform:uppercase;letter-spacing:0.08em">Radiology Report</div>
+    </div>
+
+    <div class="card-title"><span class="icon">B</span> Radiology Report</div>
+
+    <div class="report-header-grid" id="reportPatientInfo">
+      <div class="rh-item"><div class="rh-label">Patient Name</div><div class="rh-value" id="rptPatientName">-</div></div>
+      <div class="rh-item"><div class="rh-label">Patient ID</div><div class="rh-value" id="rptPatientId">-</div></div>
+      <div class="rh-item"><div class="rh-label">Date of Birth</div><div class="rh-value" id="rptDob">-</div></div>
+      <div class="rh-item"><div class="rh-label">Sex</div><div class="rh-value" id="rptSex">-</div></div>
+      <div class="rh-item"><div class="rh-label">Accession #</div><div class="rh-value" id="rptAccession">-</div></div>
+      <div class="rh-item"><div class="rh-label">Modality</div><div class="rh-value" id="rptModality">-</div></div>
+      <div class="rh-item"><div class="rh-label">Study Date</div><div class="rh-value" id="rptStudyDate">-</div></div>
+      <div class="rh-item"><div class="rh-label">Procedure</div><div class="rh-value" id="rptProcedure">-</div></div>
+      <div class="rh-item"><div class="rh-label">Referring Physician</div><div class="rh-value" id="rptReferring">-</div></div>
+    </div>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Radiologist Name <span class="required">*</span></label>
+        <input type="text" id="rptRadiologist" placeholder="Dr. Last^First">
+      </div>
+      <div class="form-group">
+        <label>Report Date</label>
+        <input type="date" id="rptDate">
+      </div>
+    </div>
+
+    <div class="report-section-label">Clinical History</div>
+    <textarea id="rptHistory" rows="2" placeholder="Brief clinical history or indication for study..."></textarea>
+
+    <div class="report-section-label">Technique</div>
+    <textarea id="rptTechnique" rows="2" placeholder="Imaging technique, contrast used, etc..."></textarea>
+
+    <div class="report-section-label">Findings <span style="color:#e53e3e">*</span></div>
+    <textarea id="rptFindings" rows="8" placeholder="Describe observations from the imaging study..."></textarea>
+
+    <div class="report-section-label">Impression / Conclusion <span style="color:#e53e3e">*</span></div>
+    <textarea id="rptImpression" rows="4" placeholder="Summary diagnosis / conclusion..."></textarea>
+
+    <div class="report-section-label">Recommendation</div>
+    <textarea id="rptRecommendation" rows="2" placeholder="Follow-up recommendations if any..."></textarea>
+
+    <!-- Print-only signature area -->
+    <div class="print-only" style="margin-top:40px;display:flex;justify-content:space-between;align-items:flex-end">
+      <div>
+        <div style="font-size:0.78rem;color:#718096">Report Date: <span id="rptDatePrint"></span></div>
+      </div>
+      <div style="text-align:center">
+        <div style="border-top:1px solid #1a1a2e;width:200px;padding-top:6px;font-size:0.82rem;font-weight:600" id="rptRadiologistPrint"></div>
+        <div style="font-size:0.72rem;color:#718096">Reporting Radiologist</div>
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:18px">
+      <button type="button" class="btn-outline" onclick="printReport()">Print / PDF</button>
+      <button type="button" class="btn btn-secondary" onclick="clearReport()">Clear</button>
+      <button type="button" class="btn btn-primary" id="saveReportBtn" onclick="saveReport()">Save Report</button>
+    </div>
+  </div>
+
+  <!-- Saved Reports -->
+  <div class="card">
+    <div class="panel-header">
+      <h3>Saved Reports</h3>
+      <button class="btn btn-sm btn-secondary" onclick="loadSavedReports()">Refresh</button>
+    </div>
+    <div class="saved-reports-list" id="savedReportsList">
+      <div class="empty-state">No reports yet.</div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* ===== HELPERS ===== */
+  function dv(obj, tag) {
+    if (!obj || !obj[tag] || !obj[tag].Value) return '';
+    const v = obj[tag].Value[0];
+    if (typeof v === 'object' && v.Alphabetic) return v.Alphabetic;
+    return v;
+  }
+  function dd(d) {
+    if (!d || d.length < 8) return d || '';
+    return d.substring(0,4)+'-'+d.substring(4,6)+'-'+d.substring(6,8);
+  }
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast ' + type + ' show';
+    setTimeout(() => t.classList.remove('show'), 5000);
+  }
+  function genUID() { return '1.2.826.0.1.3680043.8.498.' + Date.now() + '.' + Math.floor(Math.random()*1e9); }
+  function genId(p) { return p + '-' + Date.now().toString(36).toUpperCase(); }
+  function fmtDate(s) { return s ? s.replace(/-/g,'') : ''; }
+  function fmtTime(s) { return s ? s.replace(/:/g,'')+'00' : ''; }
+  function fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+    return (b/1048576).toFixed(1) + ' MB';
+  }
+
+  /* ===== TABS ===== */
+  const tabNames = ['create','upload','studies','report'];
+  function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', tabNames[i]===name));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-'+name).classList.add('active');
+    if (name === 'upload') loadUploadOrders();
+    if (name === 'studies') loadAllStudies();
+    if (name === 'report') { loadReportStudies(); loadSavedReports(); }
+  }
+
+  /* ===== TAB 1: CREATE ORDER ===== */
+  document.getElementById('scheduledDate').valueAsDate = new Date();
+  function resetForm() {
+    document.getElementById('mwlForm').reset();
+    document.getElementById('scheduledDate').valueAsDate = new Date();
+    document.getElementById('scheduledTime').value = '09:00';
+    document.getElementById('scheduledAet').value = 'DCM4CHEE';
+  }
+  function buildDicomJson() {
+    const pid = document.getElementById('patientId').value.trim();
+    const pname = document.getElementById('patientName').value.trim();
+    const pdob = fmtDate(document.getElementById('patientDob').value);
+    const psex = document.getElementById('patientSex').value;
+    const acc = document.getElementById('accessionNumber').value.trim();
+    const ref = document.getElementById('referringPhysician').value.trim();
+    const pdesc = document.getElementById('procedureDescription').value.trim();
+    const rpid = document.getElementById('requestedProcedureId').value.trim() || genId('RP');
+    const suid = document.getElementById('studyInstanceUid').value.trim() || genUID();
+    const mod = document.getElementById('modality').value;
+    const aet = document.getElementById('scheduledAet').value.trim() || 'DCM4CHEE';
+    const sdate = fmtDate(document.getElementById('scheduledDate').value);
+    const stime = fmtTime(document.getElementById('scheduledTime').value);
+    const perf = document.getElementById('performingPhysician').value.trim();
+    const spsid = document.getElementById('spsId').value.trim() || genId('SPS');
+    const spsdesc = document.getElementById('spsDescription').value.trim() || pdesc;
+
+    const sps = {
+      "00080060":{"vr":"CS","Value":[mod]},
+      "00400001":{"vr":"AE","Value":[aet]},
+      "00400002":{"vr":"DA","Value":[sdate]},
+      "00400007":{"vr":"LO","Value":[spsdesc]},
+      "00400009":{"vr":"SH","Value":[spsid]},
+      "00400020":{"vr":"CS","Value":["SCHEDULED"]}
+    };
+    if (stime) sps["00400003"] = {"vr":"TM","Value":[stime]};
+    if (perf) sps["00400006"] = {"vr":"PN","Value":[{"Alphabetic":perf}]};
+
+    const d = {
+      "00080050":{"vr":"SH","Value":[acc]},
+      "00100010":{"vr":"PN","Value":[{"Alphabetic":pname}]},
+      "00100020":{"vr":"LO","Value":[pid]},
+      "0020000D":{"vr":"UI","Value":[suid]},
+      "00321060":{"vr":"LO","Value":[pdesc]},
+      "00401001":{"vr":"SH","Value":[rpid]},
+      "00400100":{"vr":"SQ","Value":[sps]}
+    };
+    if (pdob) d["00100030"] = {"vr":"DA","Value":[pdob]};
+    if (psex) d["00100040"] = {"vr":"CS","Value":[psex]};
+    if (ref) d["00080090"] = {"vr":"PN","Value":[{"Alphabetic":ref}]};
+    return d;
+  }
+
+  document.getElementById('mwlForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Sending...';
+    try {
+      const res = await fetch('/api/mwl', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(buildDicomJson()),
+      });
+      if (res.ok) { showToast('MWL order created successfully!','success'); resetForm(); }
+      else { const err = await res.json().catch(()=>({})); showToast('Error: '+(err.error||res.statusText),'error'); }
+    } catch(err) { showToast('Network error: '+err.message,'error'); }
+    finally { btn.disabled = false; btn.textContent = 'Submit Order'; }
+  });
+
+  /* ===== TAB 2: UPLOAD DICOM ===== */
+  let uploadOrders = [];
+  let selectedUploadOrder = null;
+  let pendingFiles = [];
+
+  async function loadUploadOrders() {
+    const tbody = document.getElementById('uploadOrdersBody');
+    tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading orders...</td></tr>';
+    try {
+      const res = await fetch('/api/mwl');
+      const data = await res.json();
+      uploadOrders = Array.isArray(data) ? data : [];
+      renderUploadOrders();
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Failed to load.</td></tr>';
+    }
+  }
+
+  function renderUploadOrders() {
+    const tbody = document.getElementById('uploadOrdersBody');
+    if (!uploadOrders.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No MWL orders. Create one first.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = uploadOrders.map((o,i) => {
+      const sps = (o['00400100']&&o['00400100'].Value&&o['00400100'].Value[0]) || {};
+      const uid = dv(o,'0020000D');
+      const shortUid = uid.length > 30 ? '...' + uid.slice(-24) : uid;
+      return `<tr class="${i===selectedUploadOrder?'selected':''}" onclick="pickOrder(${i})">
+        <td title="${dv(o,'00100010')}">${dv(o,'00100010')}</td>
+        <td>${dv(o,'00100020')}</td>
+        <td><span class="badge badge-blue">${dv(o,'00080050')}</span></td>
+        <td title="${dv(o,'00321060')}">${dv(o,'00321060')}</td>
+        <td><span class="badge badge-gray">${dv(sps,'00080060')}</span></td>
+        <td>${dd(dv(sps,'00400002'))}</td>
+        <td title="${uid}" style="font-size:0.72rem;color:#718096">${shortUid}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function pickOrder(i) {
+    selectedUploadOrder = i;
+    renderUploadOrders();
+    const o = uploadOrders[i];
+    const el = document.getElementById('selectedOrderInfo');
+    el.style.background = '#d1fae5';
+    el.style.color = '#065f46';
+    el.innerHTML =
+      'Uploading to: <strong>' + dv(o,'00100010') + '</strong> &mdash; ' +
+      '<span class="badge badge-blue">' + dv(o,'00080050') + '</span> &mdash; ' +
+      dv(o,'00321060');
+    // Enable create DICOM button
+    const cdBtn = document.getElementById('createDicomBtn');
+    cdBtn.disabled = false; cdBtn.style.opacity = '1';
+    document.getElementById('createDicomHint').textContent = 'Creates a DICOM study in PACS with matching patient details from selected order';
+  }
+
+  async function createDicomFromOrder() {
+    if (selectedUploadOrder === null) { showToast('Select an order first.', 'error'); return; }
+    const order = uploadOrders[selectedUploadOrder];
+    const btn = document.getElementById('createDicomBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Creating...';
+    try {
+      const res = await fetch('/api/create-dicom-from-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(order),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast('Study created in PACS! Patient details match the order.', 'success');
+        document.getElementById('createDicomHint').innerHTML = '<span style="color:#065f46">Study created successfully &mdash; you can now upload additional DICOM files to this study.</span>';
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch(err) {
+      showToast('Network error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Create Study in PACS from Order';
+    }
+  }
+
+  // File handling
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('dicomFileInput');
+
+  dropZone.addEventListener('click', function(e) {
+    e.preventDefault();
+    fileInput.click();
+  });
+  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files && fileInput.files.length) addFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  function addFiles(filesList) {
+    for (const f of filesList) pendingFiles.push(f);
+    renderFileList();
+  }
+
+  function removeFile(i) {
+    pendingFiles.splice(i, 1);
+    renderFileList();
+  }
+
+  function renderFileList() {
+    const el = document.getElementById('fileList');
+    const summary = document.getElementById('uploadSummary');
+    const info = document.getElementById('uploadInfo');
+    if (!pendingFiles.length) {
+      el.innerHTML = ''; summary.style.display = 'none'; return;
+    }
+    el.innerHTML = pendingFiles.map((f,i) =>
+      `<div class="file-item">
+        <span class="fi-name">${f.name}</span>
+        <span class="fi-size">${fmtSize(f.size)}</span>
+        <button class="fi-remove" onclick="removeFile(${i})">X</button>
+      </div>`
+    ).join('');
+    const total = pendingFiles.reduce((a,f) => a+f.size, 0);
+    info.innerHTML = '<strong>' + pendingFiles.length + '</strong> file(s) &mdash; ' + fmtSize(total);
+    summary.style.display = 'flex';
+  }
+
+  async function uploadFiles() {
+    if (selectedUploadOrder === null) { showToast('Please select an order first!', 'error'); return; }
+    if (!pendingFiles.length) { showToast('No files added yet.', 'error'); return; }
+
+    const order = uploadOrders[selectedUploadOrder];
+    const studyUID = dv(order, '0020000D');
+
+    const btn = document.getElementById('uploadBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Uploading...';
+
+    const progWrap = document.getElementById('progressWrap');
+    const progBar = document.getElementById('progressBar');
+    progWrap.classList.add('active');
+    progBar.style.width = '10%';
+
+    const formData = new FormData();
+    formData.append('studyInstanceUID', studyUID);
+    for (const f of pendingFiles) {
+      formData.append('dicomFiles', f);
+    }
+
+    try {
+      progBar.style.width = '40%';
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      progBar.style.width = '90%';
+
+      if (res.ok) {
+        progBar.style.width = '100%';
+        showToast('Upload successful! ' + pendingFiles.length + ' file(s) stored in PACS.', 'success');
+        pendingFiles = [];
+        renderFileList();
+        setTimeout(() => { progWrap.classList.remove('active'); progBar.style.width = '0%'; }, 1500);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Upload error: ' + (err.error || res.statusText), 'error');
+        progWrap.classList.remove('active');
+      }
+    } catch(err) {
+      showToast('Network error: ' + err.message, 'error');
+      progWrap.classList.remove('active');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Upload to PACS';
+    }
+  }
+
+  /* ===== TAB 3: VIEW STUDIES ===== */
+  async function loadAllStudies() {
+    const tbody = document.getElementById('allStudiesBody');
+    tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Loading studies...</td></tr>';
+    try {
+      const res = await fetch('/api/studies');
+      const data = await res.json();
+      const studies = Array.isArray(data) ? data : [];
+      if (!studies.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No studies in PACS yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = studies.map(s => {
+        const mods = dv(s,'00080061') || dv(s,'00080060');
+        const studyUid = dv(s,'0020000D');
+        const ohifUrl = 'http://localhost:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
+        return `<tr>
+          <td title="${dv(s,'00100010')}">${dv(s,'00100010')}</td>
+          <td>${dv(s,'00100020')}</td>
+          <td>${dd(dv(s,'00080020'))}</td>
+          <td title="${dv(s,'00081030')}">${dv(s,'00081030') || '-'}</td>
+          <td><span class="badge badge-gray">${mods}</span></td>
+          <td>${dv(s,'00080050') ? '<span class="badge badge-green">'+dv(s,'00080050')+'</span>' : '<span style="color:#a0aec0">-</span>'}</td>
+          <td>${dv(s,'00201206') || '-'}</td>
+          <td>${dv(s,'00201208') || '-'}</td>
+          <td><a href="${ohifUrl}" target="_blank" class="btn btn-sm btn-primary" style="padding:4px 12px;font-size:0.72rem;text-decoration:none;display:inline-block">View</a></td>
+        </tr>`;
+      }).join('');
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Failed to load studies.</td></tr>';
+    }
+  }
+  /* ===== TAB 4: WRITE REPORT ===== */
+  let reportStudies = [];
+  let selectedReportStudy = null;
+  let reportOrderData = null;
+
+  document.getElementById('rptDate').valueAsDate = new Date();
+
+  async function loadReportStudies() {
+    const tbody = document.getElementById('reportStudiesBody');
+    tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading...</td></tr>';
+    try {
+      // Load both studies and MWL orders to merge info
+      const [studiesRes, mwlRes] = await Promise.all([fetch('/api/studies'), fetch('/api/mwl')]);
+      const studies = await studiesRes.json().then(d => Array.isArray(d) ? d : []);
+      const orders = await mwlRes.json().then(d => Array.isArray(d) ? d : []);
+
+      // Build a combined list: prefer studies, enrich with order info
+      reportStudies = studies.map(s => {
+        const acc = dv(s, '00080050');
+        const matchOrder = orders.find(o => dv(o, '00080050') === acc);
+        return { study: s, order: matchOrder || null };
+      });
+
+      // Also add orders that have no matching study yet
+      for (const o of orders) {
+        const acc = dv(o, '00080050');
+        if (!studies.find(s => dv(s, '00080050') === acc)) {
+          reportStudies.push({ study: null, order: o });
+        }
+      }
+
+      renderReportStudies();
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Failed to load.</td></tr>';
+    }
+  }
+
+  function renderReportStudies() {
+    const tbody = document.getElementById('reportStudiesBody');
+    if (!reportStudies.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No studies or orders found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = reportStudies.map((item, i) => {
+      const src = item.study || item.order;
+      const sps = (src['00400100'] && src['00400100'].Value && src['00400100'].Value[0]) || {};
+      const mod = dv(src, '00080061') || dv(src, '00080060') || dv(sps, '00080060');
+      const studyDate = dv(src, '00080020') || dv(sps, '00400002');
+      const desc = dv(src, '00081030') || dv(src, '00321060');
+      return `<tr class="${i === selectedReportStudy ? 'selected' : ''}" onclick="pickReportStudy(${i})">
+        <td>${dv(src, '00100010')}</td>
+        <td>${dv(src, '00100020')}</td>
+        <td>${dd(studyDate)}</td>
+        <td title="${desc}">${desc || '-'}</td>
+        <td><span class="badge badge-gray">${mod}</span></td>
+        <td>${dv(src, '00080050') ? '<span class="badge badge-blue">' + dv(src, '00080050') + '</span>' : '-'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function pickReportStudy(i) {
+    selectedReportStudy = i;
+    renderReportStudies();
+    const item = reportStudies[i];
+    const src = item.study || item.order;
+    const order = item.order;
+    const sps = (src['00400100'] && src['00400100'].Value && src['00400100'].Value[0]) || {};
+
+    reportOrderData = { src, order, sps };
+
+    document.getElementById('rptPatientName').textContent = dv(src, '00100010') || '-';
+    document.getElementById('rptPatientId').textContent = dv(src, '00100020') || '-';
+    document.getElementById('rptDob').textContent = dd(dv(src, '00100030')) || '-';
+    document.getElementById('rptSex').textContent = dv(src, '00100040') || '-';
+    document.getElementById('rptAccession').textContent = dv(src, '00080050') || '-';
+    document.getElementById('rptModality').textContent = dv(src, '00080061') || dv(src, '00080060') || dv(sps, '00080060') || '-';
+    document.getElementById('rptStudyDate').textContent = dd(dv(src, '00080020') || dv(sps, '00400002')) || '-';
+    document.getElementById('rptProcedure').textContent = dv(src, '00081030') || dv(src, '00321060') || (order ? dv(order, '00321060') : '') || '-';
+    document.getElementById('rptReferring').textContent = dv(src, '00080090') || (order ? dv(order, '00080090') : '') || '-';
+  }
+
+  function clearReport() {
+    document.getElementById('rptRadiologist').value = '';
+    document.getElementById('rptDate').valueAsDate = new Date();
+    document.getElementById('rptHistory').value = '';
+    document.getElementById('rptTechnique').value = '';
+    document.getElementById('rptFindings').value = '';
+    document.getElementById('rptImpression').value = '';
+    document.getElementById('rptRecommendation').value = '';
+  }
+
+  async function saveReport() {
+    const findings = document.getElementById('rptFindings').value.trim();
+    const impression = document.getElementById('rptImpression').value.trim();
+    const radiologist = document.getElementById('rptRadiologist').value.trim();
+
+    if (!radiologist) { showToast('Please enter radiologist name.', 'error'); return; }
+    if (!findings) { showToast('Findings cannot be empty.', 'error'); return; }
+    if (!impression) { showToast('Impression / Conclusion cannot be empty.', 'error'); return; }
+
+    const report = {
+      patientName: document.getElementById('rptPatientName').textContent,
+      patientId: document.getElementById('rptPatientId').textContent,
+      dob: document.getElementById('rptDob').textContent,
+      sex: document.getElementById('rptSex').textContent,
+      accessionNumber: document.getElementById('rptAccession').textContent,
+      modality: document.getElementById('rptModality').textContent,
+      studyDate: document.getElementById('rptStudyDate').textContent,
+      procedure: document.getElementById('rptProcedure').textContent,
+      referringPhysician: document.getElementById('rptReferring').textContent,
+      radiologist: radiologist,
+      reportDate: document.getElementById('rptDate').value,
+      clinicalHistory: document.getElementById('rptHistory').value.trim(),
+      technique: document.getElementById('rptTechnique').value.trim(),
+      findings: findings,
+      impression: impression,
+      recommendation: document.getElementById('rptRecommendation').value.trim(),
+    };
+
+    const btn = document.getElementById('saveReportBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+    try {
+      const res = await fetch('/api/reports', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(report),
+      });
+      if (res.ok) {
+        showToast('Report saved successfully!', 'success');
+        clearReport();
+        loadSavedReports();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch (err) {
+      showToast('Network error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save Report';
+    }
+  }
+
+  async function loadSavedReports() {
+    const el = document.getElementById('savedReportsList');
+    el.innerHTML = '<div class="loading-row">Loading...</div>';
+    try {
+      const res = await fetch('/api/reports');
+      const reports = await res.json();
+      if (!reports.length) {
+        el.innerHTML = '<div class="empty-state">No reports saved yet.</div>';
+        return;
+      }
+      el.innerHTML = reports.map(r => `
+        <div class="saved-report-item" onclick="viewReport('${r.reportId}')">
+          <div>
+            <div class="sr-patient">${r.patientName} <span class="badge badge-blue">${r.accessionNumber || ''}</span></div>
+            <div class="sr-meta">${r.procedure || '-'} &mdash; ${r.modality || ''} &mdash; Radiologist: ${r.radiologist}</div>
+          </div>
+          <div class="sr-date">${r.reportDate || ''}<br>${r.reportId}</div>
+        </div>
+      `).join('');
+    } catch(err) {
+      el.innerHTML = '<div class="empty-state">Failed to load reports.</div>';
+    }
+  }
+
+  async function viewReport(id) {
+    try {
+      const res = await fetch('/api/reports/' + id);
+      const r = await res.json();
+      // Populate the form with saved report data for viewing
+      document.getElementById('rptPatientName').textContent = r.patientName || '-';
+      document.getElementById('rptPatientId').textContent = r.patientId || '-';
+      document.getElementById('rptDob').textContent = r.dob || '-';
+      document.getElementById('rptSex').textContent = r.sex || '-';
+      document.getElementById('rptAccession').textContent = r.accessionNumber || '-';
+      document.getElementById('rptModality').textContent = r.modality || '-';
+      document.getElementById('rptStudyDate').textContent = r.studyDate || '-';
+      document.getElementById('rptProcedure').textContent = r.procedure || '-';
+      document.getElementById('rptReferring').textContent = r.referringPhysician || '-';
+      document.getElementById('rptRadiologist').value = r.radiologist || '';
+      document.getElementById('rptDate').value = r.reportDate || '';
+      document.getElementById('rptHistory').value = r.clinicalHistory || '';
+      document.getElementById('rptTechnique').value = r.technique || '';
+      document.getElementById('rptFindings').value = r.findings || '';
+      document.getElementById('rptImpression').value = r.impression || '';
+      document.getElementById('rptRecommendation').value = r.recommendation || '';
+      // Scroll to report form
+      document.getElementById('reportFormCard').scrollIntoView({ behavior: 'smooth' });
+    } catch(err) {
+      showToast('Failed to load report.', 'error');
+    }
+  }
+
+  function printReport() {
+    // Populate print-only fields
+    document.getElementById('rptRadiologistPrint').textContent = document.getElementById('rptRadiologist').value || '';
+    document.getElementById('rptDatePrint').textContent = document.getElementById('rptDate').value || '';
+    window.print();
+  }
+</script>
+</body>
+</html>

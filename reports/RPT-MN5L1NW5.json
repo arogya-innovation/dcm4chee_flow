@@ -1,0 +1,20 @@
+{
+  "patientName": "Doe^Harry",
+  "patientId": "24759123",
+  "dob": "-",
+  "sex": "M",
+  "accessionNumber": "2",
+  "modality": "MR",
+  "studyDate": "2001-01-01",
+  "procedure": "Lower Extremity^Knee",
+  "referringPhysician": "-",
+  "radiologist": "HI",
+  "reportDate": "2026-03-25",
+  "clinicalHistory": "",
+  "technique": "",
+  "findings": "ss",
+  "impression": "sss",
+  "recommendation": "sss",
+  "reportId": "RPT-MN5L1NW5",
+  "createdAt": "2026-03-25T05:08:04.277Z"
+}
