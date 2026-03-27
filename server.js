@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
+const https = require('https');
+const PDFDocument = require('pdfkit');
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR);
@@ -14,6 +16,22 @@ const PORT = 3080;
 const DCM4CHEE_BASE = 'http://178.236.185.39:8085';
 const AE_TITLE = 'DCM4CHEE';
 const MWL_AE_TITLE = 'WORKLIST';
+
+// ─── OpenMRS / Bahmni Configuration ───
+const OPENMRS_BASE = process.env.OPENMRS_BASE || 'https://178.236.185.39/openmrs';
+const OPENMRS_USER = process.env.OPENMRS_USER || 'superman';
+const OPENMRS_PASS = process.env.OPENMRS_PASS || 'Admin123';
+const OPENMRS_AUTH = 'Basic ' + Buffer.from(`${OPENMRS_USER}:${OPENMRS_PASS}`).toString('base64');
+const BAHMNI_LOCATION_UUID = process.env.BAHMNI_LOCATION_UUID || 'b5da9afd-b29a-4cbf-91c9-ccf2aa5f799e';
+const BAHMNI_PROVIDER_UUID = process.env.BAHMNI_PROVIDER_UUID || 'd7a67c17-5e07-11ef-8f7c-0242ac120002';
+
+// Bahmni Concept UUIDs
+const CONCEPT_RADIOLOGY_FORM = '2e820990-e709-4c57-bfa2-ba71b66bd717';
+const CONCEPT_SUMMARY = 'cf1844e6-d734-4e24-8a26-1f48f8e54ebb';
+const CONCEPT_RADIOLOGY_NOTES = 'ae6e5490-ade9-486e-8268-9e4efd45b07e';
+const CONCEPT_DIAGNOSTIC_IMAGES = '4e7ac8d1-38fa-461c-8b3a-aa66049369ba';
+
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
@@ -400,6 +418,658 @@ app.get('/api/reports/:id', (req, res) => {
     const data = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
     res.json(data);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GENERATE RADIOLOGY REPORT PDF ───
+// function generateReportPDF(report) {
+//   return new Promise((resolve, reject) => {
+//     const doc = new PDFDocument({ margin: 50 });
+//     const chunks = [];
+//     doc.on('data', chunk => chunks.push(chunk));
+//     doc.on('end', () => resolve(Buffer.concat(chunks)));
+//     doc.on('error', reject);
+
+//     // Header
+//     doc.fontSize(20).font('Helvetica-Bold').fillColor('#3B4899')
+//        .text('LifeRhythem', { align: 'center' });
+//     doc.fontSize(9).font('Helvetica-Oblique').fillColor('#7B82B5')
+//        .text('Citizen Wellness is our Priority', { align: 'center' });
+//     doc.moveDown(0.5);
+//     doc.fontSize(14).font('Helvetica-Bold').fillColor('#3B4899')
+//        .text('RADIOLOGY REPORT', { align: 'center' });
+//     doc.moveDown(0.5);
+//     doc.strokeColor('#3B4899').lineWidth(2)
+//        .moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+//     doc.moveDown(0.5);
+
+//     // Patient info grid
+//     const infoY = doc.y;
+//     const col1 = 50, col2 = 220, col3 = 390;
+//     function infoRow(y, label1, val1, label2, val2, label3, val3) {
+//       doc.font('Helvetica-Bold').fontSize(8).fillColor('#3B4899');
+//       doc.text(label1, col1, y);
+//       if (label2) doc.text(label2, col2, y);
+//       if (label3) doc.text(label3, col3, y);
+//       doc.font('Helvetica').fontSize(9).fillColor('#1a1a2e');
+//       doc.text(val1 || '-', col1, y + 11);
+//       if (label2) doc.text(val2 || '-', col2, y + 11);
+//       if (label3) doc.text(val3 || '-', col3, y + 11);
+//     }
+//     infoRow(infoY, 'PATIENT NAME', report.patientName, 'PATIENT ID', report.patientId, 'DOB', report.dob);
+//     infoRow(infoY + 30, 'SEX', report.sex, 'ACCESSION #', report.accessionNumber, 'MODALITY', report.modality);
+//     infoRow(infoY + 60, 'STUDY DATE', report.studyDate, 'PROCEDURE', report.procedure, 'REFERRING PHYSICIAN', report.referringPhysician);
+//     doc.y = infoY + 95;
+//     doc.strokeColor('#e8ecf1').lineWidth(1)
+//        .moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+//     doc.moveDown(0.8);
+
+//     // Report sections
+//     function section(title, content) {
+//       if (!content) return;
+//       doc.font('Helvetica-Bold').fontSize(11).fillColor('#3B4899').text(title);
+//       doc.moveDown(0.3);
+//       doc.font('Helvetica').fontSize(10).fillColor('#1a1a2e').text(content, { lineGap: 3 });
+//       doc.moveDown(0.8);
+//     }
+//     section('Clinical History', report.clinicalHistory);
+//     section('Technique', report.technique);
+//     section('Findings', report.findings);
+//     section('Impression / Conclusion', report.impression);
+//     section('Recommendation', report.recommendation);
+
+//     // Signature area
+//     doc.moveDown(2);
+//     doc.font('Helvetica').fontSize(9).fillColor('#718096')
+//        .text('Report Date: ' + (report.reportDate || new Date().toISOString().split('T')[0]), 50);
+//     doc.moveDown(2);
+//     doc.strokeColor('#1a1a2e').lineWidth(0.5)
+//        .moveTo(350, doc.y).lineTo(545, doc.y).stroke();
+//     doc.moveDown(0.3);
+//     doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a2e')
+//        .text(report.radiologist || '', 350, doc.y, { width: 195, align: 'center' });
+//     doc.font('Helvetica').fontSize(8).fillColor('#718096')
+//        .text('Reporting Radiologist', 350, doc.y, { width: 195, align: 'center' });
+
+//     doc.end();
+//   });
+// }
+
+
+
+
+// ─── GENERATE RADIOLOGY REPORT PDF (Enhanced Formatting) ───
+function generateReportPDF(report) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'portrait'
+    });
+    const chunks = [];
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    // ─── HEADER SECTION ───
+    // Top border accent
+    doc.rect(0, 0, doc.page.width, 8).fill('#3B4899');
+    
+    // Logo area (if you have a logo image)
+    // doc.image('logo.png', 50, 20, { width: 80 });
+    
+    // Title
+    doc.fontSize(24).font('Helvetica-Bold').fillColor('#3B4899')
+       .text('LifeRhythem', { align: 'center' });
+    doc.fontSize(10).font('Helvetica-Oblique').fillColor('#7B82B5')
+       .text('Citizen Wellness is our Priority', { align: 'center' });
+    doc.moveDown(0.8);
+    
+    // Report Title with underline
+    doc.fontSize(18).font('Helvetica-Bold').fillColor('#2C3E66')
+       .text('RADIOLOGY REPORT', { align: 'center' });
+    doc.moveDown(0.3);
+    
+    // Decorative line
+    doc.strokeColor('#3B4899').lineWidth(1.5)
+       .moveTo(150, doc.y).lineTo(doc.page.width - 150, doc.y).stroke();
+    doc.moveDown(1);
+
+    // ─── PATIENT INFORMATION CARD ───
+    const cardY = doc.y;
+    
+    // Background for patient info
+    doc.rect(45, cardY - 5, doc.page.width - 90, 95)
+       .fillAndStroke('#F8F9FC', '#E4E7F0');
+    
+    // Patient Info Header
+    doc.fontSize(11).font('Helvetica-Bold').fillColor('#3B4899')
+       .text('PATIENT INFORMATION', 50, cardY);
+    doc.moveDown(0.8);
+    
+    // Two-column layout for patient info
+    const leftCol = 50;
+    const rightCol = 320;
+    let currentY = doc.y;
+    
+    function addInfoRow(label, value, x, y) {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#4A5568')
+         .text(label + ':', x, y);
+      doc.font('Helvetica').fontSize(10).fillColor('#1A202C')
+         .text(value || '—', x + 85, y);
+    }
+    
+    // Left column
+    addInfoRow('Patient Name', report.patientName, leftCol, currentY);
+    addInfoRow('Patient ID', report.patientId, leftCol, currentY + 20);
+    addInfoRow('Date of Birth', report.dob, leftCol, currentY + 40);
+    addInfoRow('Sex', report.sex, leftCol, currentY + 60);
+    
+    // Right column
+    addInfoRow('Accession #', report.accessionNumber, rightCol, currentY);
+    addInfoRow('Modality', report.modality, rightCol, currentY + 20);
+    addInfoRow('Study Date', report.studyDate || '—', rightCol, currentY + 40);
+    addInfoRow('Referring Physician', report.referringPhysician || '—', rightCol, currentY + 60);
+    
+    doc.y = currentY + 85;
+    doc.moveDown(0.5);
+
+    // ─── STUDY DETAILS (if procedure exists) ───
+    if (report.procedure) {
+      doc.rect(45, doc.y - 5, doc.page.width - 90, 35)
+         .fillAndStroke('#F8F9FC', '#E4E7F0');
+      doc.font('Helvetica-Bold').fontSize(10).fillColor('#3B4899')
+         .text('PROCEDURE DETAILS', 50, doc.y);
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(10).fillColor('#1A202C')
+         .text(report.procedure, 50, doc.y, { width: doc.page.width - 100 });
+      doc.moveDown(1.2);
+    }
+
+    // ─── CLINICAL SECTIONS WITH CARD STYLING ───
+    function addSection(title, content, icon = '📋') {
+      if (!content || content.trim() === '') return;
+      
+      doc.moveDown(0.3);
+      
+      // Section header with icon
+      doc.font('Helvetica-Bold').fontSize(12).fillColor('#3B4899')
+         .text(`${icon} ${title}`, 50, doc.y, { continued: false });
+      
+      // Underline
+      doc.strokeColor('#E2E8F0').lineWidth(0.5)
+         .moveTo(50, doc.y + 2).lineTo(doc.page.width - 50, doc.y + 2).stroke();
+      doc.moveDown(0.6);
+      
+      // Content with proper spacing
+      doc.font('Helvetica').fontSize(10).fillColor('#2D3748')
+         .text(content, 50, doc.y, {
+           width: doc.page.width - 100,
+           lineGap: 4,
+           align: 'left'
+         });
+      doc.moveDown(1.2);
+    }
+    
+    // Add all sections with appropriate icons
+    addSection('Clinical History', report.clinicalHistory, '📝');
+    addSection('Technique', report.technique, '🔬');
+    addSection('Findings', report.findings, '🔍');
+    addSection('Impression / Conclusion', report.impression, '💡');
+    addSection('Recommendation', report.recommendation, '📌');
+
+    // ─── FOOTER WITH SIGNATURE ───
+    // Add page number
+    const pageCount = doc.bufferedPageRange().count;
+    for (let i = 0; i < pageCount; i++) {
+      doc.switchToPage(i);
+      const oldY = doc.y;
+      doc.font('Helvetica').fontSize(8).fillColor('#A0AEC0');
+      doc.text(
+        `Page ${i + 1} of ${pageCount}`,
+        50,
+        doc.page.height - 40,
+        { align: 'center', width: doc.page.width - 100 }
+      );
+      doc.y = oldY;
+    }
+    
+    // Go to last page for signature
+    doc.switchToPage(pageCount - 1);
+    
+    // Signature section with divider
+    doc.moveDown(2);
+    doc.strokeColor('#CBD5E0').lineWidth(0.5)
+       .moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
+    doc.moveDown(0.5);
+    
+    // Date and signature in two columns
+    const reportDate = report.reportDate || new Date().toISOString().split('T')[0];
+    doc.font('Helvetica').fontSize(9).fillColor('#4A5568')
+       .text(`Report Date: ${reportDate}`, 50, doc.y);
+    
+    // Signature box
+    const sigX = doc.page.width - 200;
+    const sigY = doc.y;
+    
+    // Signature line
+    doc.strokeColor('#2D3748').lineWidth(0.8)
+       .moveTo(sigX, sigY + 10).lineTo(sigX + 150, sigY + 10).stroke();
+    
+    // Radiologist name
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#2D3748')
+       .text(report.radiologist || '_________________________', sigX, sigY + 15, {
+         width: 150,
+         align: 'center'
+       });
+    
+    doc.font('Helvetica').fontSize(8).fillColor('#718096')
+       .text('Reporting Radiologist', sigX, sigY + 30, {
+         width: 150,
+         align: 'center'
+       });
+    
+    // Footer note
+    doc.moveDown(4);
+    doc.font('Helvetica-Oblique').fontSize(7).fillColor('#A0AEC0')
+       .text('This is a computer-generated report. No signature is required for electronic distribution.', 
+         50, doc.y, { align: 'center', width: doc.page.width - 100 });
+
+    doc.end();
+  });
+}
+
+
+
+
+
+// ─── SEARCH PATIENT UUID IN OPENMRS ───
+async function searchPatientUUID(patientId) {
+  const url = `${OPENMRS_BASE}/ws/rest/v1/patient?q=${encodeURIComponent(patientId)}&v=default&limit=1`;
+  console.log('Searching patient in OpenMRS:', url);
+  const res = await fetch(url, {
+    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
+    agent: httpsAgent,
+  });
+  if (!res.ok) throw new Error('Patient search failed: ' + res.status + ' ' + (await res.text()));
+  const data = await res.json();
+  if (!data.results || !data.results.length) throw new Error('Patient not found in OpenMRS for ID: ' + patientId);
+  return data.results[0].uuid;
+}
+
+// ─── UPLOAD PDF DOCUMENT TO BAHMNI ───
+async function uploadDocumentToBahmni(pdfBuffer, patientUuid, filename) {
+  const base64Content = 'data:application/pdf;base64,' + pdfBuffer.toString('base64');
+  const uploadUrl = `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/visitDocument/uploadDocument`;
+  console.log('Uploading PDF to Bahmni:', uploadUrl);
+  const res = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': OPENMRS_AUTH,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    agent: httpsAgent,
+    body: JSON.stringify({
+      content: base64Content,
+      format: 'pdf',
+      encounterTypeName: 'Consultation',
+      fileType: 'pdf',
+      patientUuid: patientUuid,
+    }),
+  });
+  if (!res.ok) throw new Error('Document upload failed: ' + res.status + ' ' + (await res.text()));
+  let filePath = await res.text();
+  filePath = filePath.replace(/"/g, '');
+  // Bahmni returns {url:PATH} — extract just the path
+  const urlMatch = filePath.match(/\{url:(.+?)\}/);
+  if (urlMatch) filePath = urlMatch[1];
+  console.log('Parsed document path:', filePath);
+  return filePath;
+}
+
+// ─── LOOKUP ENCOUNTER TYPE UUID FROM OPENMRS ───
+async function lookupEncounterTypeUUID(typeName) {
+  const url = `${OPENMRS_BASE}/ws/rest/v1/encountertype?q=${encodeURIComponent(typeName)}&v=default`;
+  console.log('Looking up encounter type:', url);
+  const res = await fetch(url, {
+    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
+    agent: httpsAgent,
+  });
+  if (!res.ok) throw new Error('Encounter type lookup failed: ' + res.status);
+  const data = await res.json();
+  if (!data.results || !data.results.length) throw new Error('Encounter type not found: ' + typeName);
+  console.log('Found encounter type UUID:', data.results[0].uuid, 'for', typeName);
+  return data.results[0].uuid;
+}
+
+// ─── FIND RADILOGY ORDER UUID FOR PATIENT ───
+// Bahmni order fulfilment display controls usually match observations to an existing order via `orderUuid`.
+async function lookupRadiologyOrderUuid(patientUuid, report) {
+  // Use v=full so orderType + concept display fields are present for filtering.
+  const url = `${OPENMRS_BASE}/ws/rest/v1/order?patient=${encodeURIComponent(patientUuid)}&v=full&limit=200`;
+  console.log('Looking up radiology orders:', url);
+
+  const res = await fetch(url, {
+    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
+    agent: httpsAgent,
+  });
+  if (!res.ok) throw new Error('Order lookup failed: ' + res.status + ' ' + (await res.text()));
+
+  const data = await res.json();
+  const orders = Array.isArray(data.results) ? data.results : [];
+  const radiologyOrders = orders.filter(o => o?.orderType?.display === 'Radiology Order');
+
+  if (!radiologyOrders.length) {
+    throw new Error('No Radiology Orders found for patientUuid=' + patientUuid);
+  }
+
+  const procedure = (report?.procedure || '').trim();
+  function normalize(s) { return String(s || '').trim().toLowerCase(); }
+
+  let matches = [];
+  if (procedure) {
+    const p = normalize(procedure);
+    matches = radiologyOrders.filter(o => {
+      const d = normalize(o?.concept?.display);
+      if (!d) return false;
+      return d === p || d.includes(p) || p.includes(d);
+    });
+  }
+
+  const chosenList = matches.length ? matches : radiologyOrders;
+  chosenList.sort((a, b) => (b.dateActivated || '').localeCompare(a.dateActivated || ''));
+  const chosen = chosenList[0];
+
+  console.log(
+    'Chosen radiology orderUuid:',
+    chosen.uuid,
+    'concept:',
+    chosen?.concept?.display,
+    'orderNumber:',
+    chosen?.orderNumber,
+    'orderTypeUuid:',
+    chosen?.orderType?.uuid
+  );
+  return { orderUuid: chosen.uuid, orderTypeUuid: chosen?.orderType?.uuid };
+}
+
+// ─── UPDATE LATEST RADIOLOGY FULFILLMENT OBSERVATIONS ───
+async function fetchLatestRadiologyFulfillmentOuterObs({ patientUuid, orderUuid, orderTypeUuid }) {
+  const url =
+    `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/orders` +
+    `?concept=${encodeURIComponent('Radiology order fulfillment form')}` +
+    `&includeObs=true` +
+    `&orderTypeUuid=${encodeURIComponent(orderTypeUuid)}` +
+    `&orderUuid=${encodeURIComponent(orderUuid)}` +
+    `&patientUuid=${encodeURIComponent(patientUuid)}`;
+
+  const res = await fetch(url, {
+    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
+    agent: httpsAgent,
+  });
+  if (!res.ok) throw new Error('Failed to fetch fulfillment observations: ' + res.status + ' ' + (await res.text()));
+
+  const data = await res.json();
+  if (!Array.isArray(data) || !data.length) throw new Error('No bahmnicore/orders result for orderUuid=' + orderUuid);
+
+  const bahmniObservations = data[0].bahmniObservations;
+  if (!Array.isArray(bahmniObservations) || !bahmniObservations.length) {
+    throw new Error('No bahmniObservations found for orderUuid=' + orderUuid);
+  }
+
+  // Pick the latest by observationDateTime.
+  return bahmniObservations
+    .slice()
+    .sort((a, b) => (b.observationDateTime || 0) - (a.observationDateTime || 0))[0];
+}
+
+async function updateObsValue(obsUuid, value) {
+  const obsUrl = `${OPENMRS_BASE}/ws/rest/v1/obs/${obsUuid}`;
+  const res = await fetch(obsUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': OPENMRS_AUTH,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    agent: httpsAgent,
+    body: JSON.stringify({ value: value }),
+  });
+  if (!res.ok) throw new Error('Failed to update obs ' + obsUuid + ': ' + res.status + ' ' + (await res.text()));
+  return await res.json();
+}
+
+async function updateLatestRadiologyFulfillment(patientUuid, orderUuid, orderTypeUuid, radiologyNotes, documentPath) {
+  const latestOuterObs = await fetchLatestRadiologyFulfillmentOuterObs({ patientUuid, orderUuid, orderTypeUuid });
+  const summaryGroup = latestOuterObs.groupMembers && latestOuterObs.groupMembers[0];
+  if (!summaryGroup || !Array.isArray(summaryGroup.groupMembers)) {
+    throw new Error('Latest fulfillment payload missing Summary group for orderUuid=' + orderUuid);
+  }
+
+  const notesMember = summaryGroup.groupMembers.find(g => g.conceptUuid === CONCEPT_RADIOLOGY_NOTES);
+  if (!notesMember?.uuid) {
+    throw new Error('Radiology Notes obs uuid not found for orderUuid=' + orderUuid);
+  }
+
+  const imagesMember = summaryGroup.groupMembers.find(g => g.conceptUuid === CONCEPT_DIAGNOSTIC_IMAGES);
+
+  const updatedNotes = await updateObsValue(notesMember.uuid, radiologyNotes);
+
+  let updatedImages = null;
+  let imagesUpdated = false;
+
+  // Bahmni's Complex "Diagnostic Images" value appears to require the same
+  // storage naming format produced by its own upload flow (notably `__fhir.pdf`).
+  // Avoid writing an incompatible value (it may be ignored or voided).
+  const shouldUpdateImages = Boolean(documentPath && documentPath.includes('__fhir.pdf'));
+  if (shouldUpdateImages && imagesMember?.uuid) {
+    updatedImages = await updateObsValue(imagesMember.uuid, documentPath);
+    imagesUpdated = Boolean(updatedImages?.display && updatedImages.display.includes(documentPath));
+  } else {
+    if (imagesMember?.uuid && documentPath) {
+      console.warn(
+        'Skipping Diagnostic Images update for orderUuid=' + orderUuid +
+          ' because documentPath is missing __fhir.pdf: ' + documentPath
+      );
+    }
+  }
+
+  return {
+    latestOuterObsUuid: latestOuterObs.uuid,
+    updatedNotes,
+    updatedImages,
+    imagesUpdated: imagesUpdated,
+  };
+}
+
+// When the Radiology order fulfillment has never been filled for this order yet,
+// Bahmni won't return existing `bahmniObservations`, so we need to create the
+// initial observations. For now, we create Radiology Notes only (avoids
+// Complex `Diagnostic Images` value issues when we don't have Bahmni's exact
+// expected `__fhir.pdf` payload).
+async function createBahmniRadiologyFulfillmentNotesOnly(patientUuid, orderUuid, radiologyNotes) {
+  const encounterUrl = `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/bahmniencounter`;
+
+  const notesObs = {
+    concept: { uuid: CONCEPT_RADIOLOGY_NOTES, name: 'Radiology Notes', dataType: 'Text' },
+    units: null,
+    label: 'Radiology Notes',
+    possibleAnswers: [],
+    groupMembers: [],
+    comment: null,
+    isObservation: true,
+    conceptUIConfig: [],
+    uniqueId: 'observation_1',
+    erroneousValue: null,
+    value: radiologyNotes,
+    autocompleteValue: radiologyNotes,
+    __prevValue: radiologyNotes,
+    _value: radiologyNotes,
+    disabled: false,
+    orderUuid: orderUuid,
+    voided: false,
+  };
+
+  const payload = {
+    locationUuid: BAHMNI_LOCATION_UUID,
+    patientUuid: patientUuid,
+    observations: [
+      {
+        concept: { uuid: CONCEPT_RADIOLOGY_FORM, name: 'Radiology order fulfillment form', dataType: 'N/A' },
+        units: null,
+        label: 'Radiology order fulfillment form',
+        possibleAnswers: [],
+        groupMembers: [
+          {
+            concept: { uuid: CONCEPT_SUMMARY, name: 'Summary', dataType: 'N/A' },
+            units: null,
+            label: 'Summary',
+            possibleAnswers: [],
+            groupMembers: [notesObs],
+            comment: null,
+            isObservation: true,
+            conceptUIConfig: [],
+            uniqueId: 'observation_3',
+            erroneousValue: null,
+            orderUuid: orderUuid,
+            voided: false,
+          },
+        ],
+        comment: null,
+        isObservation: true,
+        conceptUIConfig: [],
+        uniqueId: 'observation_4',
+        erroneousValue: null,
+        conceptSetName: 'Radiology Order Fulfillment Form',
+        orderUuid: orderUuid,
+        voided: false,
+      },
+    ],
+    // Keep Bahmni association consistent with the UI-copied payload.
+    orders: [],
+    drugOrders: [],
+    providers: [{ uuid: BAHMNI_PROVIDER_UUID }],
+  };
+
+  const res = await fetch(encounterUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': OPENMRS_AUTH,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    agent: httpsAgent,
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error('Radiology fulfillment create failed: ' + res.status + ' ' + (await res.text()));
+  }
+
+  return await res.json();
+}
+
+// ─── SEND REPORT TO BAHMNI (PDF + Encounter) ───
+app.post('/api/send-report-to-bahmni', async (req, res) => {
+  try {
+    const report = req.body;
+    console.log('=== Sending report to Bahmni for patient:', report.patientId, '===');
+
+    // Step 1: Search patient UUID in OpenMRS
+    const patientUuid = await searchPatientUUID(report.patientId);
+    console.log('Found patient UUID:', patientUuid);
+
+    // Step 1b: Find the correct Radiology Order UUID for this patient
+    // (Needed so the patient dashboard "Radiology Orders" control can show observations.)
+    const { orderUuid, orderTypeUuid } = await lookupRadiologyOrderUuid(patientUuid, report);
+    if (!orderUuid || !orderTypeUuid) {
+      throw new Error('Could not resolve orderUuid/orderTypeUuid for patientId=' + report.patientId);
+    }
+
+    // Step 2: Generate PDF from report data
+    const pdfBuffer = await generateReportPDF(report);
+    console.log('PDF generated, size:', pdfBuffer.length, 'bytes');
+
+    // Step 3: Upload PDF to Bahmni document storage
+    let documentPath = null;
+    try {
+      const filename = 'RadiologyReport_' + (report.accessionNumber || 'unknown').replace(/[^a-zA-Z0-9-_]/g, '') + '.pdf';
+      documentPath = await uploadDocumentToBahmni(pdfBuffer, patientUuid, filename);
+      console.log('Document uploaded to Bahmni, path:', documentPath);
+    } catch (uploadErr) {
+      console.warn('PDF upload to Bahmni failed (continuing without attachment):', uploadErr.message);
+    }
+
+    // Step 4: Update latest radiology fulfillment observations (so it shows at -1)
+    const radiologyNotes = [
+      report.findings ? 'Findings: ' + report.findings : '',
+      report.impression ? 'Impression: ' + report.impression : '',
+      report.recommendation ? 'Recommendation: ' + report.recommendation : '',
+    ].filter(Boolean).join('\n\n');
+
+    let updateResult = null;
+    try {
+      updateResult = await updateLatestRadiologyFulfillment(
+        patientUuid,
+        orderUuid,
+        orderTypeUuid,
+        radiologyNotes,
+        documentPath
+      );
+      console.log('=== Radiology fulfillment updated successfully ===');
+    } catch (updateErr) {
+      // If there are no prior fulfillment observations for this order,
+      // create initial observations so the patient dashboard can show at -1.
+      const msg = String(updateErr?.message || updateErr);
+      if (msg.includes('No bahmniObservations found for orderUuid=')) {
+        console.warn('No fulfillment observations yet; creating notes-only fulfillment for orderUuid=' + orderUuid);
+        const created = await createBahmniRadiologyFulfillmentNotesOnly(patientUuid, orderUuid, radiologyNotes);
+        res.json({
+          message: 'Report sent to Bahmni successfully (notes-only created)',
+          patientUuid,
+          orderUuid,
+          orderTypeUuid,
+          documentPath,
+          createdBahmni: true,
+          notesCreated: true,
+          notesOnly: true,
+          encounterUuid: created.encounterUuid || created.uuid,
+        });
+        return;
+      }
+      throw updateErr;
+    }
+
+    res.json({
+      message: 'Report sent to Bahmni successfully',
+      patientUuid,
+      orderUuid,
+      orderTypeUuid,
+      documentPath,
+      imagesUpdated: updateResult.imagesUpdated,
+      notesObsUuid: updateResult.updatedNotes?.uuid,
+      imagesObsUuid: updateResult.updatedImages?.uuid || null,
+    });
+  } catch (err) {
+    console.error('Send to Bahmni error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DOWNLOAD REPORT AS PDF ───
+app.get('/api/reports/:id/pdf', async (req, res) => {
+  try {
+    const filepath = path.join(REPORTS_DIR, req.params.id + '.json');
+    if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'Report not found' });
+    const report = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+    const pdfBuffer = await generateReportPDF(report);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="' + req.params.id + '.pdf"');
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('PDF generation error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

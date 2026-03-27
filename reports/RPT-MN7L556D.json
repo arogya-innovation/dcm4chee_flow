@@ -1,0 +1,20 @@
+{
+  "patientName": "gopal^venu",
+  "patientId": "Mrs.200038",
+  "dob": "1986-01-26",
+  "sex": "M",
+  "accessionNumber": "ORD-172",
+  "modality": "OT",
+  "studyDate": "-",
+  "procedure": "-",
+  "referringPhysician": "-",
+  "radiologist": "fadsf",
+  "reportDate": "2026-03-26",
+  "clinicalHistory": "fsdfc",
+  "technique": "fsdfs",
+  "findings": "fsdfcs",
+  "impression": "sfcdfcs",
+  "recommendation": "",
+  "reportId": "RPT-MN7L556D",
+  "createdAt": "2026-03-26T14:46:18.997Z"
+}

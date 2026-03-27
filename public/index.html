@@ -571,6 +571,7 @@
       <button type="button" class="btn-outline" onclick="printReport()">Print / PDF</button>
       <button type="button" class="btn btn-secondary" onclick="clearReport()">Clear</button>
       <button type="button" class="btn btn-primary" id="saveReportBtn" onclick="saveReport()">Save Report</button>
+      <button type="button" class="btn btn-success" id="sendBahmniBtn" onclick="sendReportToBahmniManual()" title="Generate PDF and send to Bahmni independently">Send to Bahmni</button>
     </div>
   </div>
 
@@ -891,7 +892,7 @@
       tbody.innerHTML = studies.map(s => {
         const mods = dv(s,'00080061') || dv(s,'00080060');
         const studyUid = dv(s,'0020000D');
-        const ohifUrl = 'http://178.236.185.39:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
+        const ohifUrl = 'http://localhost:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
         return `<tr>
           <td title="${dv(s,'00100010')}">${dv(s,'00100010')}</td>
           <td>${dv(s,'00100020')}</td>
@@ -999,16 +1000,8 @@
     document.getElementById('rptRecommendation').value = '';
   }
 
-  async function saveReport() {
-    const findings = document.getElementById('rptFindings').value.trim();
-    const impression = document.getElementById('rptImpression').value.trim();
-    const radiologist = document.getElementById('rptRadiologist').value.trim();
-
-    if (!radiologist) { showToast('Please enter radiologist name.', 'error'); return; }
-    if (!findings) { showToast('Findings cannot be empty.', 'error'); return; }
-    if (!impression) { showToast('Impression / Conclusion cannot be empty.', 'error'); return; }
-
-    const report = {
+  function buildReportData() {
+    return {
       patientName: document.getElementById('rptPatientName').textContent,
       patientId: document.getElementById('rptPatientId').textContent,
       dob: document.getElementById('rptDob').textContent,
@@ -1018,18 +1011,63 @@
       studyDate: document.getElementById('rptStudyDate').textContent,
       procedure: document.getElementById('rptProcedure').textContent,
       referringPhysician: document.getElementById('rptReferring').textContent,
-      radiologist: radiologist,
+      radiologist: document.getElementById('rptRadiologist').value.trim(),
       reportDate: document.getElementById('rptDate').value,
       clinicalHistory: document.getElementById('rptHistory').value.trim(),
       technique: document.getElementById('rptTechnique').value.trim(),
-      findings: findings,
-      impression: impression,
+      findings: document.getElementById('rptFindings').value.trim(),
+      impression: document.getElementById('rptImpression').value.trim(),
       recommendation: document.getElementById('rptRecommendation').value.trim(),
     };
+  }
+
+  function validateReport(report) {
+    if (!report.radiologist) { showToast('Please enter radiologist name.', 'error'); return false; }
+    if (!report.findings) { showToast('Findings cannot be empty.', 'error'); return false; }
+    if (!report.impression) { showToast('Impression / Conclusion cannot be empty.', 'error'); return false; }
+    return true;
+  }
+
+  async function sendReportToBahmni(report) {
+    const bahmniBtn = document.getElementById('sendBahmniBtn');
+    bahmniBtn.disabled = true;
+    bahmniBtn.innerHTML = '<span class="spinner"></span> Sending to Bahmni...';
+    try {
+      const res = await fetch('/api/send-report-to-bahmni', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(report),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast('Report sent to Bahmni! Encounter: ' + (data.encounterUuid || 'created'), 'success');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Bahmni error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch (err) {
+      showToast('Bahmni send error: ' + err.message, 'error');
+    } finally {
+      bahmniBtn.disabled = false;
+      bahmniBtn.textContent = 'Send to Bahmni';
+    }
+  }
+
+  async function sendReportToBahmniManual() {
+    const report = buildReportData();
+    if (!validateReport(report)) return;
+    await sendReportToBahmni(report);
+  }
+
+  async function saveReport() {
+    const report = buildReportData();
+    if (!validateReport(report)) return;
 
     const btn = document.getElementById('saveReportBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+    // Fire Bahmni send independently (does not block local save)
+    sendReportToBahmni(report);
 
     try {
       const res = await fetch('/api/reports', {
@@ -1104,12 +1142,343 @@
     }
   }
 
+  // function printReport() {
+  //   // Populate print-only fields
+  //   document.getElementById('rptRadiologistPrint').textContent = document.getElementById('rptRadiologist').value || '';
+  //   document.getElementById('rptDatePrint').textContent = document.getElementById('rptDate').value || '';
+  //   window.print();
+  // }
+
+
   function printReport() {
-    // Populate print-only fields
-    document.getElementById('rptRadiologistPrint').textContent = document.getElementById('rptRadiologist').value || '';
-    document.getElementById('rptDatePrint').textContent = document.getElementById('rptDate').value || '';
-    window.print();
-  }
+    // Get all the report data from the form
+    const reportData = {
+        patientName: document.getElementById('rptPatientName').textContent,
+        patientId: document.getElementById('rptPatientId').textContent,
+        dob: document.getElementById('rptDob').textContent,
+        sex: document.getElementById('rptSex').textContent,
+        accessionNumber: document.getElementById('rptAccession').textContent,
+        modality: document.getElementById('rptModality').textContent,
+        studyDate: document.getElementById('rptStudyDate').textContent,
+        procedure: document.getElementById('rptProcedure').textContent,
+        referringPhysician: document.getElementById('rptReferring').textContent,
+        radiologist: document.getElementById('rptRadiologist').value || '',
+        reportDate: document.getElementById('rptDate').value || new Date().toISOString().split('T')[0],
+        clinicalHistory: document.getElementById('rptHistory').value,
+        technique: document.getElementById('rptTechnique').value,
+        findings: document.getElementById('rptFindings').value,
+        impression: document.getElementById('rptImpression').value,
+        recommendation: document.getElementById('rptRecommendation').value
+    };
+    
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank', 'width=800,height=600,toolbar=no,menubar=no,scrollbars=yes');
+    
+    // Write the HTML content - split the script tag to avoid termination
+    printWindow.document.write('<!DOCTYPE html>\n');
+    printWindow.document.write('<html>\n');
+    printWindow.document.write('<head>\n');
+    printWindow.document.write('<title>Radiology Report - ' + escapeHtml(reportData.patientName) + '</title>\n');
+    printWindow.document.write('<meta charset="UTF-8">\n');
+    printWindow.document.write('<style>\n');
+    printWindow.document.write(`
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+                
+                body {
+                    font-family: 'Inter', 'Helvetica', Arial, sans-serif;
+                    margin: 0;
+                    padding: 40px;
+                    background: white;
+                    color: #1a1a2e;
+                }
+                
+                .report-container {
+                    max-width: 1100px;
+                    margin: 0 auto;
+                    background: white;
+                }
+                
+                .header {
+                    text-align: center;
+                    margin-bottom: 30px;
+                }
+                
+                .header h1 {
+                    color: #3B4899;
+                    font-size: 28px;
+                    margin-bottom: 5px;
+                    font-weight: 700;
+                }
+                
+                .header .subtitle {
+                    color: #7B82B5;
+                    font-size: 11px;
+                    margin-bottom: 15px;
+                }
+                
+                .report-title {
+                    color: #2C3E66;
+                    font-size: 20px;
+                    font-weight: bold;
+                    margin: 20px 0 10px;
+                }
+                
+                .divider {
+                    border-top: 2px solid #3B4899;
+                    width: 80%;
+                    margin: 10px auto;
+                }
+                
+                .patient-card {
+                    background: #F8F9FC;
+                    border: 1px solid #E4E7F0;
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 20px 0;
+                }
+                
+                .patient-card h3 {
+                    color: #3B4899;
+                    font-size: 14px;
+                    margin-bottom: 15px;
+                    font-weight: 600;
+                }
+                
+                .info-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 15px;
+                }
+                
+                .info-row {
+                    display: flex;
+                    align-items: baseline;
+                }
+                
+                .info-label {
+                    font-weight: bold;
+                    color: #4A5568;
+                    font-size: 10px;
+                    min-width: 120px;
+                }
+                
+                .info-value {
+                    color: #1A202C;
+                    font-size: 11px;
+                    font-weight: normal;
+                }
+                
+                .section {
+                    margin: 25px 0;
+                }
+                
+                .section-title {
+                    color: #3B4899;
+                    font-size: 14px;
+                    font-weight: bold;
+                    margin-bottom: 10px;
+                    border-bottom: 1px solid #E2E8F0;
+                    padding-bottom: 5px;
+                }
+                
+                .section-content {
+                    color: #2D3748;
+                    font-size: 11px;
+                    line-height: 1.5;
+                    margin-top: 10px;
+                    white-space: pre-wrap;
+                }
+                
+                .signature-area {
+                    margin-top: 50px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-end;
+                }
+                
+                .signature-line {
+                    border-top: 1px solid #2D3748;
+                    width: 250px;
+                    margin-top: 30px;
+                    padding-top: 8px;
+                    text-align: center;
+                }
+                
+                .signature-name {
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                
+                .signature-title {
+                    font-size: 9px;
+                    color: #718096;
+                }
+                
+                .report-date {
+                    font-size: 9px;
+                    color: #4A5568;
+                }
+                
+                .footer-note {
+                    margin-top: 40px;
+                    text-align: center;
+                    font-size: 8px;
+                    color: #A0AEC0;
+                    font-style: italic;
+                }
+                
+                @media print {
+                    body {
+                        padding: 0;
+                        margin: 0;
+                    }
+                    .report-container {
+                        margin: 0;
+                        padding: 20px;
+                    }
+                    .patient-card {
+                        break-inside: avoid;
+                    }
+                    .section {
+                        break-inside: avoid;
+                    }
+                }
+            </style>\n`);
+    printWindow.document.write('</head>\n');
+    printWindow.document.write('<body>\n');
+    printWindow.document.write(`
+            <div class="report-container">
+                <div class="header">
+                    <h1>LifeRhythem</h1>
+                    <div class="subtitle">Citizen Wellness is our Priority</div>
+                    <div class="report-title">RADIOLOGY REPORT</div>
+                    <div class="divider"></div>
+                </div>
+                
+                <div class="patient-card">
+                    <h3>PATIENT INFORMATION</h3>
+                    <div class="info-grid">
+                        <div class="info-row">
+                            <span class="info-label">Patient Name:</span>
+                            <span class="info-value">${escapeHtml(reportData.patientName) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Patient ID:</span>
+                            <span class="info-value">${escapeHtml(reportData.patientId) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Date of Birth:</span>
+                            <span class="info-value">${escapeHtml(reportData.dob) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Sex:</span>
+                            <span class="info-value">${escapeHtml(reportData.sex) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Accession #:</span>
+                            <span class="info-value">${escapeHtml(reportData.accessionNumber) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Modality:</span>
+                            <span class="info-value">${escapeHtml(reportData.modality) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Study Date:</span>
+                            <span class="info-value">${escapeHtml(reportData.studyDate) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Referring Physician:</span>
+                            <span class="info-value">${escapeHtml(reportData.referringPhysician) || '—'}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                ${reportData.procedure && reportData.procedure !== '-' ? `
+                <div class="section">
+                    <div class="section-title">📋 PROCEDURE DETAILS</div>
+                    <div class="section-content">${escapeHtml(reportData.procedure)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.clinicalHistory ? `
+                <div class="section">
+                    <div class="section-title">📝 CLINICAL HISTORY</div>
+                    <div class="section-content">${escapeHtml(reportData.clinicalHistory)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.technique ? `
+                <div class="section">
+                    <div class="section-title">🔬 TECHNIQUE</div>
+                    <div class="section-content">${escapeHtml(reportData.technique)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.findings ? `
+                <div class="section">
+                    <div class="section-title">🔍 FINDINGS</div>
+                    <div class="section-content">${escapeHtml(reportData.findings)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.impression ? `
+                <div class="section">
+                    <div class="section-title">💡 IMPRESSION / CONCLUSION</div>
+                    <div class="section-content">${escapeHtml(reportData.impression)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.recommendation ? `
+                <div class="section">
+                    <div class="section-title">📌 RECOMMENDATION</div>
+                    <div class="section-content">${escapeHtml(reportData.recommendation)}</div>
+                </div>
+                ` : ''}
+                
+                <div class="signature-area">
+                    <div class="report-date">
+                        Report Date: ${escapeHtml(reportData.reportDate)}
+                    </div>
+                    <div class="signature-line">
+                        <div class="signature-name">${escapeHtml(reportData.radiologist) || '_________________________'}</div>
+                        <div class="signature-title">Reporting Radiologist</div>
+                    </div>
+                </div>
+                
+                <div class="footer-note">
+                    This is a computer-generated report. No signature is required for electronic distribution.
+                </div>
+            </div>
+    `);
+    
+    // Add the script separately to avoid template literal issues
+    printWindow.document.write('<scr' + 'ipt>\n');
+    printWindow.document.write('window.onload = function() { window.print(); };\n');
+    printWindow.document.write('</scr' + 'ipt>\n');
+    
+    printWindow.document.write('</body>\n');
+    printWindow.document.write('</html>\n');
+    printWindow.document.close();
+}
+
+// Helper function to prevent XSS and handle special characters
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+
+
+
 </script>
 </body>
 </html>

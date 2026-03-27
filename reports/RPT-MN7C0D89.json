@@ -1,0 +1,20 @@
+{
+  "patientName": "Test^Radiology",
+  "patientId": "Mrs.200042",
+  "dob": "2023-03-25",
+  "sex": "M",
+  "accessionNumber": "ORD-181",
+  "modality": "OT",
+  "studyDate": "2026-03-26",
+  "procedure": "X-ray of skull, two views",
+  "referringPhysician": "-",
+  "radiologist": "fadsf",
+  "reportDate": "2026-03-26",
+  "clinicalHistory": "fsdfc",
+  "technique": "fsdfs",
+  "findings": "fsdfcs",
+  "impression": "sfcdfcs",
+  "recommendation": "",
+  "reportId": "RPT-MN7C0D89",
+  "createdAt": "2026-03-26T10:30:39.609Z"
+}
