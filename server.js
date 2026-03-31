@@ -1,1079 +1,1484 @@
-const express = require('express');
-const fetch = require('node-fetch');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const crypto = require('crypto');
-const https = require('https');
-const PDFDocument = require('pdfkit');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LifeRhythem &mdash; PACS Worklist Manager</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-const REPORTS_DIR = path.join(__dirname, 'reports');
-if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR);
-
-const app = express();
-const PORT = 3080;
-
-const DCM4CHEE_BASE = 'http://178.236.185.39:8085';
-const AE_TITLE = 'DCM4CHEE';
-const MWL_AE_TITLE = 'WORKLIST';
-
-// ─── OpenMRS / Bahmni Configuration ───
-const OPENMRS_BASE = process.env.OPENMRS_BASE || 'https://178.236.185.39/openmrs';
-const OPENMRS_USER = process.env.OPENMRS_USER || 'superman';
-const OPENMRS_PASS = process.env.OPENMRS_PASS || 'Admin123';
-const OPENMRS_AUTH = 'Basic ' + Buffer.from(`${OPENMRS_USER}:${OPENMRS_PASS}`).toString('base64');
-const BAHMNI_LOCATION_UUID = process.env.BAHMNI_LOCATION_UUID || 'b5da9afd-b29a-4cbf-91c9-ccf2aa5f799e';
-const BAHMNI_PROVIDER_UUID = process.env.BAHMNI_PROVIDER_UUID || 'd7a67c17-5e07-11ef-8f7c-0242ac120002';
-
-// Bahmni Concept UUIDs
-const CONCEPT_RADIOLOGY_FORM = '2e820990-e709-4c57-bfa2-ba71b66bd717';
-const CONCEPT_SUMMARY = 'cf1844e6-d734-4e24-8a26-1f48f8e54ebb';
-const CONCEPT_RADIOLOGY_NOTES = 'ae6e5490-ade9-486e-8268-9e4efd45b07e';
-const CONCEPT_DIAGNOSTIC_IMAGES = '4e7ac8d1-38fa-461c-8b3a-aa66049369ba';
-
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
-
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// ─── CREATE MWL ORDER (Step 1: create patient, Step 2: create MWL item) ───
-app.post('/api/mwl', async (req, res) => {
-  try {
-    const dicom = req.body;
-
-    const patientJson = {};
-    const patientTags = ['00100010', '00100020', '00100030', '00100040'];
-    for (const tag of patientTags) {
-      if (dicom[tag]) patientJson[tag] = dicom[tag];
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f0f2f5; color: #1a1a2e; min-height: 100vh;
     }
 
-    const patientUrl = `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${AE_TITLE}/rs/patients`;
-    const patientRes = await fetch(patientUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/dicom+json' },
-      body: JSON.stringify(patientJson),
-    });
-
-    if (!patientRes.ok && patientRes.status !== 409) {
-      const errText = await patientRes.text();
-      console.error('Patient creation error:', patientRes.status, errText);
-      return res.status(patientRes.status).json({ error: 'Failed to create patient: ' + (errText || patientRes.statusText) });
+    .header {
+      background: linear-gradient(135deg, #2D3A7B 0%, #3B4899 40%, #4F5AA8 100%);
+      color: #fff; padding: 18px 0 0 0; text-align: center;
+      box-shadow: 0 4px 20px rgba(59,72,153,0.25);
     }
-    console.log('Patient created/exists, status:', patientRes.status);
-
-    const mwlUrl = `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${MWL_AE_TITLE}/rs/mwlitems`;
-    const mwlRes = await fetch(mwlUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/dicom+json' },
-      body: JSON.stringify(dicom),
-    });
-
-    if (mwlRes.ok) {
-      let data;
-      const text = await mwlRes.text();
-      try { data = JSON.parse(text); } catch { data = { message: text || 'MWL item created successfully' }; }
-      res.status(mwlRes.status).json(data);
-    } else {
-      const errText = await mwlRes.text();
-      console.error('MWL creation error:', mwlRes.status, errText);
-      res.status(mwlRes.status).json({ error: errText || mwlRes.statusText });
+    .header-brand {
+      display: flex; align-items: center; justify-content: center; gap: 14px;
     }
-  } catch (err) {
-    console.error('Proxy error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+    .header-brand img { height: 48px; }
+    .header-brand h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
+    .header-brand .tagline { font-size: 0.72rem; color: #b8bde0; margin-top: 1px; font-style: italic; }
+    .header p.subtitle { font-size: 0.78rem; color: #b8bde0; margin-top: 4px; }
 
-// ─── LIST MWL ORDERS ───
-app.get('/api/mwl', async (req, res) => {
-  const url = `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${MWL_AE_TITLE}/rs/mwlitems?includefield=all&limit=200`;
-  try {
-    const response = await fetch(url, { headers: { 'Accept': 'application/dicom+json' } });
-    if (response.ok) {
-      const data = await response.json();
-      res.json(data);
-    } else if (response.status === 204) {
-      res.json([]);
-    } else {
-      const errText = await response.text();
-      res.status(response.status).json({ error: errText || response.statusText });
+    .tab-bar { display: flex; justify-content: center; margin-top: 16px; }
+    .tab-btn {
+      padding: 10px 28px; background: transparent; color: #a0aec0; border: none;
+      font-size: 0.86rem; font-weight: 600; font-family: inherit; cursor: pointer;
+      border-bottom: 3px solid transparent; transition: all 0.2s;
     }
-  } catch (err) {
-    console.error('List MWL error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+    .tab-btn:hover { color: #e0e3f0; }
+    .tab-btn.active { color: #fff; border-bottom-color: #E8B298; }
 
-// ─── LIST STUDIES ───
-app.get('/api/studies', async (req, res) => {
-  const url = `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${AE_TITLE}/rs/studies?includefield=all&limit=200`;
-  try {
-    const response = await fetch(url, { headers: { 'Accept': 'application/dicom+json' } });
-    if (response.ok) {
-      const data = await response.json();
-      res.json(data);
-    } else if (response.status === 204) {
-      res.json([]);
-    } else {
-      const errText = await response.text();
-      res.status(response.status).json({ error: errText || response.statusText });
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .container { max-width: 1100px; margin: 28px auto; padding: 0 20px; }
+
+    .card {
+      background: #fff; border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 6px 24px rgba(0,0,0,0.06);
+      padding: 28px; margin-bottom: 20px;
     }
-  } catch (err) {
-    console.error('List studies error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── UPLOAD DICOM FILES VIA STOW-RS ───
-app.post('/api/upload', upload.array('dicomFiles', 100), async (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ error: 'No DICOM files provided' });
-  }
-
-  const studyUID = req.body.studyInstanceUID || '';
-  const stowUrl = studyUID
-    ? `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${AE_TITLE}/rs/studies/${studyUID}`
-    : `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${AE_TITLE}/rs/studies`;
-
-  const boundary = '----DicomBoundary' + crypto.randomBytes(16).toString('hex');
-
-  // Build multipart/related body
-  const parts = [];
-  for (const file of req.files) {
-    parts.push(Buffer.from(
-      `\r\n--${boundary}\r\nContent-Type: application/dicom\r\n\r\n`
-    ));
-    parts.push(file.buffer);
-  }
-  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-
-  const body = Buffer.concat(parts);
-
-  try {
-    console.log(`STOW-RS: uploading ${req.files.length} file(s) to ${stowUrl}`);
-    const response = await fetch(stowUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
-        'Accept': 'application/dicom+json',
-      },
-      body: body,
-    });
-
-    const text = await response.text();
-    if (response.ok) {
-      let data;
-      try { data = JSON.parse(text); } catch { data = { message: 'Upload successful' }; }
-      console.log('STOW-RS success:', response.status);
-      res.status(response.status).json(data);
-    } else {
-      console.error('STOW-RS error:', response.status, text);
-      res.status(response.status).json({ error: text || response.statusText });
+    .card-title {
+      font-size: 1rem; font-weight: 600; color: #3B4899;
+      margin-bottom: 18px; padding-bottom: 10px; border-bottom: 2px solid #e8ecf1;
+      display: flex; align-items: center; gap: 8px;
     }
-  } catch (err) {
-    console.error('Upload error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── BUILD MINIMAL DICOM FILE FROM ORDER DATA ───
-function buildDicomFile(opts) {
-  // opts: patientName, patientId, dob, sex, studyUid, accession, modality, studyDate, studyDesc, seriesUid, sopUid
-  function genUID() { return '1.2.826.0.1.3680043.8.498.' + Date.now() + '.' + Math.floor(Math.random() * 1e10); }
-  const seriesUid = opts.seriesUid || genUID();
-  const sopUid = opts.sopUid || genUID();
-  const sopClassUid = '1.2.840.10008.5.1.4.1.1.7'; // Secondary Capture
-  const transferSyntax = '1.2.840.10008.1.2.1'; // Explicit VR Little Endian
-  const implClassUid = '1.2.826.0.1.3680043.8.498.1';
-  const now = new Date();
-  const dateStr = opts.studyDate || (now.getFullYear().toString() + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0'));
-  const timeStr = String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0') + String(now.getSeconds()).padStart(2,'0');
-
-  // Helper: write a DICOM element in Explicit VR Little Endian
-  const elements = [];
-  function addElem(group, elem, vr, value) {
-    const valBuf = Buffer.from(value, 'utf-8');
-    let padded = valBuf;
-    if (valBuf.length % 2 !== 0) {
-      // Pad with space (0x20) for most VRs, null (0x00) for UI
-      const padByte = (vr === 'UI') ? 0x00 : 0x20;
-      padded = Buffer.concat([valBuf, Buffer.from([padByte])]);
+    .card-title .icon {
+      width: 22px; height: 22px; background: linear-gradient(135deg, #3B4899, #4F5AA8); color: #fff; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700;
     }
-    const header = Buffer.alloc(8);
-    header.writeUInt16LE(group, 0);
-    header.writeUInt16LE(elem, 2);
-    header.write(vr, 4, 2, 'ascii');
-    header.writeUInt16LE(padded.length, 6);
-    elements.push(Buffer.concat([header, padded]));
-  }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-group { display: flex; flex-direction: column; }
+    .form-group.full-width { grid-column: 1 / -1; }
 
-  // File Meta Information
-  const metaElems = [];
-  function addMeta(group, elem, vr, value) {
-    const valBuf = Buffer.from(value, 'utf-8');
-    let padded = valBuf;
-    if (valBuf.length % 2 !== 0) {
-      const padByte = (vr === 'UI') ? 0x00 : 0x20;
-      padded = Buffer.concat([valBuf, Buffer.from([padByte])]);
+    label { font-size: 0.78rem; font-weight: 500; color: #4a5568; margin-bottom: 5px; }
+    label .required { color: #e53e3e; margin-left: 2px; }
+
+    input, select {
+      padding: 9px 12px; border: 1.5px solid #e2e8f0; border-radius: 10px;
+      font-size: 0.88rem; font-family: inherit; color: #1a1a2e; background: #fafbfc;
+      transition: all 0.2s ease; outline: none;
     }
-    const header = Buffer.alloc(8);
-    header.writeUInt16LE(group, 0);
-    header.writeUInt16LE(elem, 2);
-    header.write(vr, 4, 2, 'ascii');
-    header.writeUInt16LE(padded.length, 6);
-    metaElems.push(Buffer.concat([header, padded]));
-  }
-
-  // (0002,0001) File Meta Information Version — OB VR uses long format: tag(4)+VR(2)+reserved(2)+len(4)+val
-  const fmiVersion = Buffer.alloc(8);
-  fmiVersion.writeUInt16LE(0x0002, 0); fmiVersion.writeUInt16LE(0x0001, 2);
-  fmiVersion.write('OB', 4, 2, 'ascii');
-  // bytes 6-7 are reserved (already 0 from alloc)
-  const fmiVersionLen = Buffer.alloc(4); fmiVersionLen.writeUInt32LE(2, 0);
-  const fmiVersionVal = Buffer.from([0x00, 0x01]);
-  metaElems.push(Buffer.concat([fmiVersion, fmiVersionLen, fmiVersionVal]));
-
-  addMeta(0x0002, 0x0002, 'UI', sopClassUid);       // Media Storage SOP Class UID
-  addMeta(0x0002, 0x0003, 'UI', sopUid);             // Media Storage SOP Instance UID
-  addMeta(0x0002, 0x0010, 'UI', transferSyntax);     // Transfer Syntax UID
-  addMeta(0x0002, 0x0012, 'UI', implClassUid);       // Implementation Class UID
-
-  // Calculate group length
-  const metaBody = Buffer.concat(metaElems);
-  const grpLenHeader = Buffer.alloc(12);
-  grpLenHeader.writeUInt16LE(0x0002, 0); grpLenHeader.writeUInt16LE(0x0000, 2);
-  grpLenHeader.write('UL', 4, 2, 'ascii'); grpLenHeader.writeUInt16LE(4, 6);
-  grpLenHeader.writeUInt32LE(metaBody.length, 8);
-
-  // Dataset elements (sorted by tag)
-  addElem(0x0008, 0x0016, 'UI', sopClassUid);                  // SOP Class UID
-  addElem(0x0008, 0x0018, 'UI', sopUid);                       // SOP Instance UID
-  addElem(0x0008, 0x0020, 'DA', dateStr);                      // Study Date
-  addElem(0x0008, 0x0030, 'TM', timeStr);                      // Study Time
-  addElem(0x0008, 0x0050, 'SH', opts.accession || '');         // Accession Number
-  addElem(0x0008, 0x0060, 'CS', opts.modality || 'OT');        // Modality
-  addElem(0x0008, 0x0064, 'CS', 'WSD');                        // Conversion Type
-  addElem(0x0008, 0x1030, 'LO', opts.studyDesc || '');         // Study Description
-  addElem(0x0010, 0x0010, 'PN', opts.patientName || '');       // Patient Name
-  addElem(0x0010, 0x0020, 'LO', opts.patientId || '');         // Patient ID
-  addElem(0x0010, 0x0030, 'DA', opts.dob || '');               // Patient DOB
-  addElem(0x0010, 0x0040, 'CS', opts.sex || '');               // Patient Sex
-  addElem(0x0020, 0x000D, 'UI', opts.studyUid);                // Study Instance UID
-  addElem(0x0020, 0x000E, 'UI', seriesUid);                    // Series Instance UID
-  addElem(0x0020, 0x0010, 'SH', opts.accession || '');         // Study ID
-  addElem(0x0020, 0x0011, 'IS', '1');                          // Series Number
-  addElem(0x0020, 0x0013, 'IS', '1');                          // Instance Number
-
-  // Minimal 1x1 pixel data for a valid SC image
-  addElem(0x0028, 0x0002, 'US', '');  // placeholder, will fix below
-  addElem(0x0028, 0x0004, 'CS', 'MONOCHROME2');
-  addElem(0x0028, 0x0010, 'US', '');  // Rows placeholder
-  addElem(0x0028, 0x0011, 'US', '');  // Columns placeholder
-  addElem(0x0028, 0x0100, 'US', '');  // Bits Allocated
-  addElem(0x0028, 0x0101, 'US', '');  // Bits Stored
-  addElem(0x0028, 0x0102, 'US', '');  // High Bit
-
-  // Remove placeholder US elements, re-add as proper binary US
-  // Actually let me rebuild the image attributes properly
-  elements.splice(-7); // remove the 7 placeholder image elements
-
-  // Add proper US (unsigned short) elements for image attributes
-  function addUS(group, elem, value) {
-    const buf = Buffer.alloc(10);
-    buf.writeUInt16LE(group, 0); buf.writeUInt16LE(elem, 2);
-    buf.write('US', 4, 2, 'ascii'); buf.writeUInt16LE(2, 6);
-    buf.writeUInt16LE(value, 8);
-    elements.push(buf);
-  }
-
-  addUS(0x0028, 0x0002, 1);    // Samples Per Pixel
-  addElem(0x0028, 0x0004, 'CS', 'MONOCHROME2'); // Photometric Interpretation
-  addUS(0x0028, 0x0010, 1);    // Rows
-  addUS(0x0028, 0x0011, 1);    // Columns
-  addUS(0x0028, 0x0100, 8);    // Bits Allocated
-  addUS(0x0028, 0x0101, 8);    // Bits Stored
-  addUS(0x0028, 0x0102, 7);    // High Bit
-  addUS(0x0028, 0x0103, 0);    // Pixel Representation
-
-  // Pixel Data (7FE0,0010) — OW VR uses long format: tag(4)+VR(2)+reserved(2)+len(4)+val
-  const pixHeader = Buffer.alloc(8);
-  pixHeader.writeUInt16LE(0x7FE0, 0); pixHeader.writeUInt16LE(0x0010, 2);
-  pixHeader.write('OW', 4, 2, 'ascii');
-  // bytes 6-7 are reserved (already 0 from alloc)
-  const pixLen = Buffer.alloc(4); pixLen.writeUInt32LE(2, 0); // 2 bytes (1x1 pixel padded to even)
-  const pixData = Buffer.from([0x00, 0x00]); // black 1x1 pixel
-  elements.push(Buffer.concat([pixHeader, pixLen, pixData]));
-
-  const dataset = Buffer.concat(elements);
-
-  // 128-byte preamble + DICM
-  const preamble = Buffer.alloc(128, 0);
-  const magic = Buffer.from('DICM', 'ascii');
-
-  return Buffer.concat([preamble, magic, grpLenHeader, metaBody, dataset]);
-}
-
-// Helper: extract value from DICOM JSON
-function djv(obj, tag) {
-  if (!obj || !obj[tag] || !obj[tag].Value) return '';
-  const v = obj[tag].Value[0];
-  if (typeof v === 'object' && v.Alphabetic) return v.Alphabetic;
-  return String(v);
-}
-
-// ─── CREATE DICOM FROM MWL ORDER & UPLOAD TO PACS ───
-app.post('/api/create-dicom-from-order', async (req, res) => {
-  try {
-    const order = req.body;
-    const sps = (order['00400100'] && order['00400100'].Value && order['00400100'].Value[0]) || {};
-
-    const studyUid = djv(order, '0020000D');
-    if (!studyUid) return res.status(400).json({ error: 'Order has no Study Instance UID' });
-
-    const dicomBuf = buildDicomFile({
-      patientName: djv(order, '00100010'),
-      patientId:   djv(order, '00100020'),
-      dob:         djv(order, '00100030'),
-      sex:         djv(order, '00100040'),
-      studyUid:    studyUid,
-      accession:   djv(order, '00080050'),
-      modality:    djv(sps, '00080060') || 'OT',
-      studyDate:   djv(sps, '00400002'),
-      studyDesc:   djv(order, '00321060'),
-    });
-
-    // Upload via STOW-RS
-    const stowUrl = `${DCM4CHEE_BASE}/dcm4chee-arc/aets/${AE_TITLE}/rs/studies`;
-    const boundary = '----DicomBoundary' + crypto.randomBytes(16).toString('hex');
-    const body = Buffer.concat([
-      Buffer.from(`\r\n--${boundary}\r\nContent-Type: application/dicom\r\n\r\n`),
-      dicomBuf,
-      Buffer.from(`\r\n--${boundary}--\r\n`),
-    ]);
-
-    console.log(`Creating DICOM for order ${djv(order, '00080050')} -> Study UID ${studyUid}`);
-    const stowRes = await fetch(stowUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
-        'Accept': 'application/dicom+json',
-      },
-      body: body,
-    });
-
-    const text = await stowRes.text();
-    if (stowRes.ok) {
-      let data;
-      try { data = JSON.parse(text); } catch { data = { message: 'DICOM created and uploaded' }; }
-      console.log('DICOM created & uploaded:', stowRes.status);
-      res.json({ message: 'DICOM file created and uploaded to PACS', studyUid, details: data });
-    } else {
-      console.error('STOW-RS error for created DICOM:', stowRes.status, text);
-      res.status(stowRes.status).json({ error: text || stowRes.statusText });
+    input:focus, select:focus {
+      border-color: #3B4899; background: #fff; box-shadow: 0 0 0 3px rgba(59,72,153,0.12);
     }
-  } catch (err) {
-    console.error('Create DICOM error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── SAVE REPORT ───
-app.post('/api/reports', (req, res) => {
-  try {
-    const report = req.body;
-    report.reportId = report.reportId || 'RPT-' + Date.now().toString(36).toUpperCase();
-    report.createdAt = new Date().toISOString();
-    const filename = report.reportId + '.json';
-    fs.writeFileSync(path.join(REPORTS_DIR, filename), JSON.stringify(report, null, 2));
-    console.log('Report saved:', report.reportId);
-    res.json({ message: 'Report saved successfully', reportId: report.reportId });
-  } catch (err) {
-    console.error('Save report error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── LIST REPORTS ───
-app.get('/api/reports', (req, res) => {
-  try {
-    const files = fs.readdirSync(REPORTS_DIR).filter(f => f.endsWith('.json'));
-    const reports = files.map(f => {
-      const data = JSON.parse(fs.readFileSync(path.join(REPORTS_DIR, f), 'utf-8'));
-      return data;
-    }).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-    res.json(reports);
-  } catch (err) {
-    console.error('List reports error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── GET SINGLE REPORT ───
-app.get('/api/reports/:id', (req, res) => {
-  try {
-    const filepath = path.join(REPORTS_DIR, req.params.id + '.json');
-    if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'Report not found' });
-    const data = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── GENERATE RADIOLOGY REPORT PDF ───
-// function generateReportPDF(report) {
-//   return new Promise((resolve, reject) => {
-//     const doc = new PDFDocument({ margin: 50 });
-//     const chunks = [];
-//     doc.on('data', chunk => chunks.push(chunk));
-//     doc.on('end', () => resolve(Buffer.concat(chunks)));
-//     doc.on('error', reject);
-
-//     // Header
-//     doc.fontSize(20).font('Helvetica-Bold').fillColor('#3B4899')
-//        .text('LifeRhythem', { align: 'center' });
-//     doc.fontSize(9).font('Helvetica-Oblique').fillColor('#7B82B5')
-//        .text('Citizen Wellness is our Priority', { align: 'center' });
-//     doc.moveDown(0.5);
-//     doc.fontSize(14).font('Helvetica-Bold').fillColor('#3B4899')
-//        .text('RADIOLOGY REPORT', { align: 'center' });
-//     doc.moveDown(0.5);
-//     doc.strokeColor('#3B4899').lineWidth(2)
-//        .moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-//     doc.moveDown(0.5);
-
-//     // Patient info grid
-//     const infoY = doc.y;
-//     const col1 = 50, col2 = 220, col3 = 390;
-//     function infoRow(y, label1, val1, label2, val2, label3, val3) {
-//       doc.font('Helvetica-Bold').fontSize(8).fillColor('#3B4899');
-//       doc.text(label1, col1, y);
-//       if (label2) doc.text(label2, col2, y);
-//       if (label3) doc.text(label3, col3, y);
-//       doc.font('Helvetica').fontSize(9).fillColor('#1a1a2e');
-//       doc.text(val1 || '-', col1, y + 11);
-//       if (label2) doc.text(val2 || '-', col2, y + 11);
-//       if (label3) doc.text(val3 || '-', col3, y + 11);
-//     }
-//     infoRow(infoY, 'PATIENT NAME', report.patientName, 'PATIENT ID', report.patientId, 'DOB', report.dob);
-//     infoRow(infoY + 30, 'SEX', report.sex, 'ACCESSION #', report.accessionNumber, 'MODALITY', report.modality);
-//     infoRow(infoY + 60, 'STUDY DATE', report.studyDate, 'PROCEDURE', report.procedure, 'REFERRING PHYSICIAN', report.referringPhysician);
-//     doc.y = infoY + 95;
-//     doc.strokeColor('#e8ecf1').lineWidth(1)
-//        .moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-//     doc.moveDown(0.8);
-
-//     // Report sections
-//     function section(title, content) {
-//       if (!content) return;
-//       doc.font('Helvetica-Bold').fontSize(11).fillColor('#3B4899').text(title);
-//       doc.moveDown(0.3);
-//       doc.font('Helvetica').fontSize(10).fillColor('#1a1a2e').text(content, { lineGap: 3 });
-//       doc.moveDown(0.8);
-//     }
-//     section('Clinical History', report.clinicalHistory);
-//     section('Technique', report.technique);
-//     section('Findings', report.findings);
-//     section('Impression / Conclusion', report.impression);
-//     section('Recommendation', report.recommendation);
-
-//     // Signature area
-//     doc.moveDown(2);
-//     doc.font('Helvetica').fontSize(9).fillColor('#718096')
-//        .text('Report Date: ' + (report.reportDate || new Date().toISOString().split('T')[0]), 50);
-//     doc.moveDown(2);
-//     doc.strokeColor('#1a1a2e').lineWidth(0.5)
-//        .moveTo(350, doc.y).lineTo(545, doc.y).stroke();
-//     doc.moveDown(0.3);
-//     doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a2e')
-//        .text(report.radiologist || '', 350, doc.y, { width: 195, align: 'center' });
-//     doc.font('Helvetica').fontSize(8).fillColor('#718096')
-//        .text('Reporting Radiologist', 350, doc.y, { width: 195, align: 'center' });
-
-//     doc.end();
-//   });
-// }
-
-
-
-
-// ─── GENERATE RADIOLOGY REPORT PDF (Enhanced Formatting) ───
-function generateReportPDF(report) {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ 
-      margin: 50,
-      size: 'A4',
-      layout: 'portrait'
-    });
-    const chunks = [];
-    doc.on('data', chunk => chunks.push(chunk));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-
-    // ─── HEADER SECTION ───
-    // Top border accent
-    doc.rect(0, 0, doc.page.width, 8).fill('#3B4899');
-    
-    // Logo area (if you have a logo image)
-    // doc.image('logo.png', 50, 20, { width: 80 });
-    
-    // Title
-    doc.fontSize(24).font('Helvetica-Bold').fillColor('#3B4899')
-       .text('LifeRhythem', { align: 'center' });
-    doc.fontSize(10).font('Helvetica-Oblique').fillColor('#7B82B5')
-       .text('Citizen Wellness is our Priority', { align: 'center' });
-    doc.moveDown(0.8);
-    
-    // Report Title with underline
-    doc.fontSize(18).font('Helvetica-Bold').fillColor('#2C3E66')
-       .text('RADIOLOGY REPORT', { align: 'center' });
-    doc.moveDown(0.3);
-    
-    // Decorative line
-    doc.strokeColor('#3B4899').lineWidth(1.5)
-       .moveTo(150, doc.y).lineTo(doc.page.width - 150, doc.y).stroke();
-    doc.moveDown(1);
-
-    // ─── PATIENT INFORMATION CARD ───
-    const cardY = doc.y;
-    
-    // Background for patient info
-    doc.rect(45, cardY - 5, doc.page.width - 90, 95)
-       .fillAndStroke('#F8F9FC', '#E4E7F0');
-    
-    // Patient Info Header
-    doc.fontSize(11).font('Helvetica-Bold').fillColor('#3B4899')
-       .text('PATIENT INFORMATION', 50, cardY);
-    doc.moveDown(0.8);
-    
-    // Two-column layout for patient info
-    const leftCol = 50;
-    const rightCol = 320;
-    let currentY = doc.y;
-    
-    function addInfoRow(label, value, x, y) {
-      doc.font('Helvetica-Bold').fontSize(9).fillColor('#4A5568')
-         .text(label + ':', x, y);
-      doc.font('Helvetica').fontSize(10).fillColor('#1A202C')
-         .text(value || '—', x + 85, y);
-    }
-    
-    // Left column
-    addInfoRow('Patient Name', report.patientName, leftCol, currentY);
-    addInfoRow('Patient ID', report.patientId, leftCol, currentY + 20);
-    addInfoRow('Date of Birth', report.dob, leftCol, currentY + 40);
-    addInfoRow('Sex', report.sex, leftCol, currentY + 60);
-    
-    // Right column
-    addInfoRow('Accession #', report.accessionNumber, rightCol, currentY);
-    addInfoRow('Modality', report.modality, rightCol, currentY + 20);
-    addInfoRow('Study Date', report.studyDate || '—', rightCol, currentY + 40);
-    addInfoRow('Referring Physician', report.referringPhysician || '—', rightCol, currentY + 60);
-    
-    doc.y = currentY + 85;
-    doc.moveDown(0.5);
-
-    // ─── STUDY DETAILS (if procedure exists) ───
-    if (report.procedure) {
-      doc.rect(45, doc.y - 5, doc.page.width - 90, 35)
-         .fillAndStroke('#F8F9FC', '#E4E7F0');
-      doc.font('Helvetica-Bold').fontSize(10).fillColor('#3B4899')
-         .text('PROCEDURE DETAILS', 50, doc.y);
-      doc.moveDown(0.5);
-      doc.font('Helvetica').fontSize(10).fillColor('#1A202C')
-         .text(report.procedure, 50, doc.y, { width: doc.page.width - 100 });
-      doc.moveDown(1.2);
+    select {
+      cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%234a5568' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
     }
 
-    // ─── CLINICAL SECTIONS WITH CARD STYLING ───
-    function addSection(title, content, icon = '📋') {
-      if (!content || content.trim() === '') return;
-      
-      doc.moveDown(0.3);
-      
-      // Section header with icon
-      doc.font('Helvetica-Bold').fontSize(12).fillColor('#3B4899')
-         .text(`${icon} ${title}`, 50, doc.y, { continued: false });
-      
-      // Underline
-      doc.strokeColor('#E2E8F0').lineWidth(0.5)
-         .moveTo(50, doc.y + 2).lineTo(doc.page.width - 50, doc.y + 2).stroke();
-      doc.moveDown(0.6);
-      
-      // Content with proper spacing
-      doc.font('Helvetica').fontSize(10).fillColor('#2D3748')
-         .text(content, 50, doc.y, {
-           width: doc.page.width - 100,
-           lineGap: 4,
-           align: 'left'
-         });
-      doc.moveDown(1.2);
+    .btn-row { display: flex; gap: 12px; justify-content: flex-end; margin-top: 8px; }
+    .btn {
+      padding: 10px 28px; border: none; border-radius: 10px;
+      font-size: 0.88rem; font-weight: 600; font-family: inherit;
+      cursor: pointer; transition: all 0.2s ease;
     }
-    
-    // Add all sections with appropriate icons
-    addSection('Clinical History', report.clinicalHistory, '📝');
-    addSection('Technique', report.technique, '🔬');
-    addSection('Findings', report.findings, '🔍');
-    addSection('Impression / Conclusion', report.impression, '💡');
-    addSection('Recommendation', report.recommendation, '📌');
-
-    // ─── FOOTER WITH SIGNATURE ───
-    // Add page number
-    const pageCount = doc.bufferedPageRange().count;
-    for (let i = 0; i < pageCount; i++) {
-      doc.switchToPage(i);
-      const oldY = doc.y;
-      doc.font('Helvetica').fontSize(8).fillColor('#A0AEC0');
-      doc.text(
-        `Page ${i + 1} of ${pageCount}`,
-        50,
-        doc.page.height - 40,
-        { align: 'center', width: doc.page.width - 100 }
-      );
-      doc.y = oldY;
+    .btn-primary {
+      background: linear-gradient(135deg, #3B4899, #4F5AA8); color: #fff;
+      box-shadow: 0 4px 14px rgba(59,72,153,0.3);
     }
-    
-    // Go to last page for signature
-    doc.switchToPage(pageCount - 1);
-    
-    // Signature section with divider
-    doc.moveDown(2);
-    doc.strokeColor('#CBD5E0').lineWidth(0.5)
-       .moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
-    doc.moveDown(0.5);
-    
-    // Date and signature in two columns
-    const reportDate = report.reportDate || new Date().toISOString().split('T')[0];
-    doc.font('Helvetica').fontSize(9).fillColor('#4A5568')
-       .text(`Report Date: ${reportDate}`, 50, doc.y);
-    
-    // Signature box
-    const sigX = doc.page.width - 200;
-    const sigY = doc.y;
-    
-    // Signature line
-    doc.strokeColor('#2D3748').lineWidth(0.8)
-       .moveTo(sigX, sigY + 10).lineTo(sigX + 150, sigY + 10).stroke();
-    
-    // Radiologist name
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#2D3748')
-       .text(report.radiologist || '_________________________', sigX, sigY + 15, {
-         width: 150,
-         align: 'center'
-       });
-    
-    doc.font('Helvetica').fontSize(8).fillColor('#718096')
-       .text('Reporting Radiologist', sigX, sigY + 30, {
-         width: 150,
-         align: 'center'
-       });
-    
-    // Footer note
-    doc.moveDown(4);
-    doc.font('Helvetica-Oblique').fontSize(7).fillColor('#A0AEC0')
-       .text('This is a computer-generated report. No signature is required for electronic distribution.', 
-         50, doc.y, { align: 'center', width: doc.page.width - 100 });
-
-    doc.end();
-  });
-}
-
-
-
-
-
-// ─── SEARCH PATIENT UUID IN OPENMRS ───
-async function searchPatientUUID(patientId) {
-  const url = `${OPENMRS_BASE}/ws/rest/v1/patient?q=${encodeURIComponent(patientId)}&v=default&limit=1`;
-  console.log('Searching patient in OpenMRS:', url);
-  const res = await fetch(url, {
-    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
-    agent: httpsAgent,
-  });
-  if (!res.ok) throw new Error('Patient search failed: ' + res.status + ' ' + (await res.text()));
-  const data = await res.json();
-  if (!data.results || !data.results.length) throw new Error('Patient not found in OpenMRS for ID: ' + patientId);
-  return data.results[0].uuid;
-}
-
-// ─── UPLOAD PDF DOCUMENT TO BAHMNI ───
-async function uploadDocumentToBahmni(pdfBuffer, patientUuid, filename) {
-  const base64Content = 'data:application/pdf;base64,' + pdfBuffer.toString('base64');
-  const uploadUrl = `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/visitDocument/uploadDocument`;
-  console.log('Uploading PDF to Bahmni:', uploadUrl);
-  const res = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': OPENMRS_AUTH,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    agent: httpsAgent,
-    body: JSON.stringify({
-      content: base64Content,
-      format: 'pdf',
-      encounterTypeName: 'Consultation',
-      fileType: 'pdf',
-      patientUuid: patientUuid,
-    }),
-  });
-  if (!res.ok) throw new Error('Document upload failed: ' + res.status + ' ' + (await res.text()));
-  let filePath = await res.text();
-  filePath = filePath.replace(/"/g, '');
-  // Bahmni returns {url:PATH} — extract just the path
-  const urlMatch = filePath.match(/\{url:(.+?)\}/);
-  if (urlMatch) filePath = urlMatch[1];
-  console.log('Parsed document path:', filePath);
-  return filePath;
-}
-
-// ─── LOOKUP ENCOUNTER TYPE UUID FROM OPENMRS ───
-async function lookupEncounterTypeUUID(typeName) {
-  const url = `${OPENMRS_BASE}/ws/rest/v1/encountertype?q=${encodeURIComponent(typeName)}&v=default`;
-  console.log('Looking up encounter type:', url);
-  const res = await fetch(url, {
-    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
-    agent: httpsAgent,
-  });
-  if (!res.ok) throw new Error('Encounter type lookup failed: ' + res.status);
-  const data = await res.json();
-  if (!data.results || !data.results.length) throw new Error('Encounter type not found: ' + typeName);
-  console.log('Found encounter type UUID:', data.results[0].uuid, 'for', typeName);
-  return data.results[0].uuid;
-}
-
-// ─── FIND RADILOGY ORDER UUID FOR PATIENT ───
-// Bahmni order fulfilment display controls usually match observations to an existing order via `orderUuid`.
-async function lookupRadiologyOrderUuid(patientUuid, report) {
-  // Use v=full so orderType + concept display fields are present for filtering.
-  const url = `${OPENMRS_BASE}/ws/rest/v1/order?patient=${encodeURIComponent(patientUuid)}&v=full&limit=200`;
-  console.log('Looking up radiology orders:', url);
-
-  const res = await fetch(url, {
-    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
-    agent: httpsAgent,
-  });
-  if (!res.ok) throw new Error('Order lookup failed: ' + res.status + ' ' + (await res.text()));
-
-  const data = await res.json();
-  const orders = Array.isArray(data.results) ? data.results : [];
-  const radiologyOrders = orders.filter(o => o?.orderType?.display === 'Radiology Order');
-
-  if (!radiologyOrders.length) {
-    throw new Error('No Radiology Orders found for patientUuid=' + patientUuid);
-  }
-
-  const procedure = (report?.procedure || '').trim();
-  function normalize(s) { return String(s || '').trim().toLowerCase(); }
-
-  let matches = [];
-  if (procedure) {
-    const p = normalize(procedure);
-    matches = radiologyOrders.filter(o => {
-      const d = normalize(o?.concept?.display);
-      if (!d) return false;
-      return d === p || d.includes(p) || p.includes(d);
-    });
-  }
-
-  const chosenList = matches.length ? matches : radiologyOrders;
-  chosenList.sort((a, b) => (b.dateActivated || '').localeCompare(a.dateActivated || ''));
-  const chosen = chosenList[0];
-
-  console.log(
-    'Chosen radiology orderUuid:',
-    chosen.uuid,
-    'concept:',
-    chosen?.concept?.display,
-    'orderNumber:',
-    chosen?.orderNumber,
-    'orderTypeUuid:',
-    chosen?.orderType?.uuid
-  );
-  return { orderUuid: chosen.uuid, orderTypeUuid: chosen?.orderType?.uuid };
-}
-
-// ─── UPDATE LATEST RADIOLOGY FULFILLMENT OBSERVATIONS ───
-async function fetchLatestRadiologyFulfillmentOuterObs({ patientUuid, orderUuid, orderTypeUuid }) {
-  const url =
-    `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/orders` +
-    `?concept=${encodeURIComponent('Radiology order fulfillment form')}` +
-    `&includeObs=true` +
-    `&orderTypeUuid=${encodeURIComponent(orderTypeUuid)}` +
-    `&orderUuid=${encodeURIComponent(orderUuid)}` +
-    `&patientUuid=${encodeURIComponent(patientUuid)}`;
-
-  const res = await fetch(url, {
-    headers: { 'Authorization': OPENMRS_AUTH, 'Accept': 'application/json' },
-    agent: httpsAgent,
-  });
-  if (!res.ok) throw new Error('Failed to fetch fulfillment observations: ' + res.status + ' ' + (await res.text()));
-
-  const data = await res.json();
-  if (!Array.isArray(data) || !data.length) throw new Error('No bahmnicore/orders result for orderUuid=' + orderUuid);
-
-  const bahmniObservations = data[0].bahmniObservations;
-  if (!Array.isArray(bahmniObservations) || !bahmniObservations.length) {
-    throw new Error('No bahmniObservations found for orderUuid=' + orderUuid);
-  }
-
-  // Pick the latest by observationDateTime.
-  return bahmniObservations
-    .slice()
-    .sort((a, b) => (b.observationDateTime || 0) - (a.observationDateTime || 0))[0];
-}
-
-async function updateObsValue(obsUuid, value) {
-  const obsUrl = `${OPENMRS_BASE}/ws/rest/v1/obs/${obsUuid}`;
-  const res = await fetch(obsUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': OPENMRS_AUTH,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    agent: httpsAgent,
-    body: JSON.stringify({ value: value }),
-  });
-  if (!res.ok) throw new Error('Failed to update obs ' + obsUuid + ': ' + res.status + ' ' + (await res.text()));
-  return await res.json();
-}
-
-async function updateLatestRadiologyFulfillment(patientUuid, orderUuid, orderTypeUuid, radiologyNotes, documentPath) {
-  const latestOuterObs = await fetchLatestRadiologyFulfillmentOuterObs({ patientUuid, orderUuid, orderTypeUuid });
-  const summaryGroup = latestOuterObs.groupMembers && latestOuterObs.groupMembers[0];
-  if (!summaryGroup || !Array.isArray(summaryGroup.groupMembers)) {
-    throw new Error('Latest fulfillment payload missing Summary group for orderUuid=' + orderUuid);
-  }
-
-  const notesMember = summaryGroup.groupMembers.find(g => g.conceptUuid === CONCEPT_RADIOLOGY_NOTES);
-  if (!notesMember?.uuid) {
-    throw new Error('Radiology Notes obs uuid not found for orderUuid=' + orderUuid);
-  }
-
-  const imagesMember = summaryGroup.groupMembers.find(g => g.conceptUuid === CONCEPT_DIAGNOSTIC_IMAGES);
-
-  const updatedNotes = await updateObsValue(notesMember.uuid, radiologyNotes);
-
-  let updatedImages = null;
-  let imagesUpdated = false;
-
-  // Bahmni's Complex "Diagnostic Images" value appears to require the same
-  // storage naming format produced by its own upload flow (notably `__fhir.pdf`).
-  // Avoid writing an incompatible value (it may be ignored or voided).
-  const shouldUpdateImages = Boolean(documentPath && documentPath.includes('__fhir.pdf'));
-  if (shouldUpdateImages && imagesMember?.uuid) {
-    updatedImages = await updateObsValue(imagesMember.uuid, documentPath);
-    imagesUpdated = Boolean(updatedImages?.display && updatedImages.display.includes(documentPath));
-  } else {
-    if (imagesMember?.uuid && documentPath) {
-      console.warn(
-        'Skipping Diagnostic Images update for orderUuid=' + orderUuid +
-          ' because documentPath is missing __fhir.pdf: ' + documentPath
-      );
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,72,153,0.4); }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: #e8ecf1; color: #4a5568; }
+    .btn-secondary:hover { background: #dde1e8; }
+    .btn-success {
+      background: linear-gradient(135deg, #276749, #38a169); color: #fff;
+      box-shadow: 0 4px 14px rgba(56,161,105,0.3);
     }
-  }
+    .btn-success:hover { transform: translateY(-1px); }
+    .btn-success:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-sm { padding: 6px 16px; font-size: 0.8rem; border-radius: 8px; }
 
-  return {
-    latestOuterObsUuid: latestOuterObs.uuid,
-    updatedNotes,
-    updatedImages,
-    imagesUpdated: imagesUpdated,
-  };
-}
+    .toast {
+      position: fixed; top: 24px; right: 24px; padding: 14px 22px; border-radius: 12px;
+      font-size: 0.88rem; font-weight: 500; color: #fff; z-index: 1000;
+      transform: translateX(120%); transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+      max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    }
+    .toast.show { transform: translateX(0); }
+    .toast.success { background: #38a169; }
+    .toast.error { background: #e53e3e; }
 
-// When the Radiology order fulfillment has never been filled for this order yet,
-// Bahmni won't return existing `bahmniObservations`, so we need to create the
-// initial observations. For now, we create Radiology Notes only (avoids
-// Complex `Diagnostic Images` value issues when we don't have Bahmni's exact
-// expected `__fhir.pdf` payload).
-async function createBahmniRadiologyFulfillmentNotesOnly(patientUuid, orderUuid, radiologyNotes) {
-  const encounterUrl = `${OPENMRS_BASE}/ws/rest/v1/bahmnicore/bahmniencounter`;
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      margin-right: 8px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-  const notesObs = {
-    concept: { uuid: CONCEPT_RADIOLOGY_NOTES, name: 'Radiology Notes', dataType: 'Text' },
-    units: null,
-    label: 'Radiology Notes',
-    possibleAnswers: [],
-    groupMembers: [],
-    comment: null,
-    isObservation: true,
-    conceptUIConfig: [],
-    uniqueId: 'observation_1',
-    erroneousValue: null,
-    value: radiologyNotes,
-    autocompleteValue: radiologyNotes,
-    __prevValue: radiologyNotes,
-    _value: radiologyNotes,
-    disabled: false,
-    orderUuid: orderUuid,
-    voided: false,
-  };
+    /* Tables */
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .panel-header h3 { font-size: 0.95rem; font-weight: 600; color: #3B4899; }
 
-  const payload = {
-    locationUuid: BAHMNI_LOCATION_UUID,
-    patientUuid: patientUuid,
-    observations: [
-      {
-        concept: { uuid: CONCEPT_RADIOLOGY_FORM, name: 'Radiology order fulfillment form', dataType: 'N/A' },
-        units: null,
-        label: 'Radiology order fulfillment form',
-        possibleAnswers: [],
-        groupMembers: [
-          {
-            concept: { uuid: CONCEPT_SUMMARY, name: 'Summary', dataType: 'N/A' },
-            units: null,
-            label: 'Summary',
-            possibleAnswers: [],
-            groupMembers: [notesObs],
-            comment: null,
-            isObservation: true,
-            conceptUIConfig: [],
-            uniqueId: 'observation_3',
-            erroneousValue: null,
-            orderUuid: orderUuid,
-            voided: false,
-          },
-        ],
-        comment: null,
-        isObservation: true,
-        conceptUIConfig: [],
-        uniqueId: 'observation_4',
-        erroneousValue: null,
-        conceptSetName: 'Radiology Order Fulfillment Form',
-        orderUuid: orderUuid,
-        voided: false,
-      },
-    ],
-    // Keep Bahmni association consistent with the UI-copied payload.
-    orders: [],
-    drugOrders: [],
-    providers: [{ uuid: BAHMNI_PROVIDER_UUID }],
-  };
+    .data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+    .data-table thead th {
+      background: #f7f8fa; color: #4a5568; font-weight: 600; padding: 10px 12px;
+      text-align: left; border-bottom: 2px solid #e8ecf1; position: sticky; top: 0;
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .data-table tbody tr { cursor: pointer; transition: background 0.15s; }
+    .data-table tbody tr:hover { background: #eef0fa; }
+    .data-table tbody tr.selected { background: #dde0f5; box-shadow: inset 3px 0 0 #3B4899; }
+    .data-table tbody td {
+      padding: 10px 12px; border-bottom: 1px solid #f0f2f5;
+      max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .table-scroll { max-height: 320px; overflow-y: auto; border: 1px solid #e8ecf1; border-radius: 10px; }
 
-  const res = await fetch(encounterUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': OPENMRS_AUTH,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    agent: httpsAgent,
-    body: JSON.stringify(payload),
-  });
+    .empty-state { text-align: center; color: #a0aec0; padding: 40px 20px; font-size: 0.88rem; }
+    .loading-row { text-align: center; padding: 30px; color: #a0aec0; }
 
-  if (!res.ok) {
-    throw new Error('Radiology fulfillment create failed: ' + res.status + ' ' + (await res.text()));
-  }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; }
+    .badge-blue { background: #dde0f5; color: #3B4899; }
+    .badge-green { background: #d1fae5; color: #065f46; }
+    .badge-gray { background: #e8ecf1; color: #4a5568; }
 
-  return await res.json();
-}
+    /* Upload zone */
+    .upload-zone {
+      border: 2px dashed #cbd5e0; border-radius: 14px; padding: 40px 20px;
+      text-align: center; cursor: pointer; transition: all 0.2s;
+      background: #fafbfc; position: relative;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: #3B4899; background: #eef0fa;
+    }
+    .upload-zone .uz-icon { font-size: 2.5rem; margin-bottom: 8px; }
+    .upload-zone .uz-title { font-size: 0.95rem; font-weight: 600; color: #1a1a2e; }
+    .upload-zone .uz-sub { font-size: 0.8rem; color: #a0aec0; margin-top: 4px; }
 
-// ─── SEND REPORT TO BAHMNI (PDF + Encounter) ───
-app.post('/api/send-report-to-bahmni', async (req, res) => {
-  try {
-    const report = req.body;
-    console.log('=== Sending report to Bahmni for patient:', report.patientId, '===');
+    .file-list { margin-top: 14px; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px; background: #f7f8fa; border-radius: 8px; margin-bottom: 6px;
+      font-size: 0.82rem;
+    }
+    .file-item .fi-name { font-weight: 500; color: #1a1a2e; }
+    .file-item .fi-size { color: #a0aec0; font-size: 0.75rem; }
+    .file-item .fi-remove {
+      background: none; border: none; color: #e53e3e; cursor: pointer;
+      font-weight: 600; font-size: 0.85rem; padding: 2px 8px; border-radius: 4px;
+    }
+    .file-item .fi-remove:hover { background: #fee2e2; }
 
-    // Step 1: Search patient UUID in OpenMRS
-    const patientUuid = await searchPatientUUID(report.patientId);
-    console.log('Found patient UUID:', patientUuid);
+    .upload-summary {
+      margin-top: 16px; display: flex; align-items: center;
+      justify-content: space-between; gap: 16px;
+    }
+    .upload-summary .info { font-size: 0.85rem; color: #4a5568; }
+    .upload-summary .info strong { color: #3B4899; }
 
-    // Step 1b: Find the correct Radiology Order UUID for this patient
-    // (Needed so the patient dashboard "Radiology Orders" control can show observations.)
-    const { orderUuid, orderTypeUuid } = await lookupRadiologyOrderUuid(patientUuid, report);
-    if (!orderUuid || !orderTypeUuid) {
-      throw new Error('Could not resolve orderUuid/orderTypeUuid for patientId=' + report.patientId);
+    .progress-bar-wrap {
+      width: 100%; height: 6px; background: #e8ecf1; border-radius: 3px;
+      margin-top: 12px; overflow: hidden; display: none;
+    }
+    .progress-bar-wrap.active { display: block; }
+    .progress-bar {
+      height: 100%; background: linear-gradient(90deg, #3B4899, #4F5AA8);
+      border-radius: 3px; transition: width 0.3s;
     }
 
-    // Step 2: Generate PDF from report data
-    const pdfBuffer = await generateReportPDF(report);
-    console.log('PDF generated, size:', pdfBuffer.length, 'bytes');
+    /* Report writing */
+    textarea {
+      padding: 10px 14px; border: 1.5px solid #e2e8f0; border-radius: 10px;
+      font-size: 0.88rem; font-family: inherit; color: #1a1a2e; background: #fafbfc;
+      transition: all 0.2s ease; outline: none; resize: vertical; min-height: 80px;
+    }
+    textarea:focus {
+      border-color: #3B4899; background: #fff; box-shadow: 0 0 0 3px rgba(59,72,153,0.12);
+    }
+    textarea { width: 100%; }
+    .report-header-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px;
+      background: linear-gradient(135deg, #f0f1fa 0%, #f7f8fc 100%);
+      padding: 20px; border-radius: 12px; margin-bottom: 20px;
+      border: 1px solid #dde0f5;
+    }
+    .report-header-grid .rh-item { font-size: 0.82rem; }
+    .report-header-grid .rh-label {
+      font-weight: 600; color: #3B4899; font-size: 0.68rem;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .report-header-grid .rh-value { color: #1a1a2e; margin-top: 3px; font-weight: 500; }
+    .report-section-label {
+      font-size: 0.84rem; font-weight: 600; color: #3B4899;
+      margin-bottom: 6px; margin-top: 18px;
+      padding-left: 10px; border-left: 3px solid #4F5AA8;
+    }
+    .report-section-label:first-of-type { margin-top: 0; }
+    .saved-reports-list { margin-top: 16px; }
+    .saved-report-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; background: #f7f8fa; border-radius: 10px;
+      margin-bottom: 8px; cursor: pointer; transition: background 0.15s;
+    }
+    .saved-report-item:hover { background: #eef2ff; }
+    .saved-report-item .sr-patient { font-weight: 600; color: #1a1a2e; font-size: 0.88rem; }
+    .saved-report-item .sr-meta { font-size: 0.78rem; color: #718096; }
+    .saved-report-item .sr-date { font-size: 0.75rem; color: #a0aec0; }
+    .btn-outline {
+      background: transparent; border: 1.5px solid #3B4899; color: #3B4899;
+      padding: 8px 20px; border-radius: 10px; font-size: 0.84rem; font-weight: 600;
+      font-family: inherit; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-outline:hover { background: #3B4899; color: #fff; }
+    .print-only { display: none; }
+    @media print {
+      .header, .tab-bar, .toast, .btn, .btn-row, .btn-outline, .panel-header button,
+      .data-table, .table-scroll, #reportSelectCard, #savedReportsCard,
+      .form-grid, #saveReportBtn { display: none !important; }
+      .tab-content { display: none !important; }
+      #tab-report { display: block !important; }
+      #reportFormCard { display: block !important; }
+      .card { box-shadow: none; border: none; break-inside: avoid; padding: 0; }
+      .print-only { display: block !important; }
+      body { background: #fff; }
+      .report-header-grid { border: 1px solid #ddd; }
+      textarea { border: none; background: none; padding: 6px 0; min-height: auto; }
+      .report-section-label { color: #3B4899; }
+      .container { max-width: 100%; margin: 0; padding: 0 20px; }
+    }
 
-    // Step 3: Upload PDF to Bahmni document storage
-    let documentPath = null;
+    @media (max-width: 640px) {
+      .form-grid { grid-template-columns: 1fr; }
+      .card { padding: 18px; }
+      .container { padding: 0 12px; margin: 14px auto; }
+      .tab-btn { padding: 10px 14px; font-size: 0.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-brand">
+    <img src="/logo.svg" alt="LifeRhythem">
+    <div>
+      <!-- <h1>LifeRhythem <span style="font-weight:400;font-size:0.85rem;opacity:0.8">PACS Manager</span></h1>
+      <div class="tagline">Citizen Wellness is our Priority</div> -->
+    </div>
+  </div>
+  <!-- <p class="subtitle">dcm4chee-arc &mdash; Order &bull; Upload &bull; View &bull; Report</p> -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('create')">1. Create Order</button>
+    <button class="tab-btn" onclick="switchTab('upload')">2. Upload DICOM</button>
+    <button class="tab-btn" onclick="switchTab('studies')">3. View Studies</button>
+    <button class="tab-btn" onclick="switchTab('report')">4. Write Report</button>
+  </div>
+</div>
+
+<!-- ==================== TAB 1: CREATE ORDER ==================== -->
+<div class="tab-content active" id="tab-create">
+<div class="container" style="max-width:820px">
+  <form id="mwlForm">
+    <div class="card">
+      <div class="card-title"><span class="icon">1</span> Patient Information</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Patient ID <span class="required">*</span></label>
+          <input type="text" id="patientId" required placeholder="e.g. PAT-00123">
+        </div>
+        <div class="form-group">
+          <label>Patient Name <span class="required">*</span></label>
+          <input type="text" id="patientName" required placeholder="Last^First^Middle">
+        </div>
+        <div class="form-group">
+          <label>Date of Birth</label>
+          <input type="date" id="patientDob">
+        </div>
+        <div class="form-group">
+          <label>Sex</label>
+          <select id="patientSex">
+            <option value="">-- Select --</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="O">Other</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">2</span> Order / Procedure</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Accession Number <span class="required">*</span></label>
+          <input type="text" id="accessionNumber" required placeholder="e.g. ACC-2026-001">
+        </div>
+        <div class="form-group">
+          <label>Referring Physician</label>
+          <input type="text" id="referringPhysician" placeholder="Last^First">
+        </div>
+        <div class="form-group full-width">
+          <label>Requested Procedure Description <span class="required">*</span></label>
+          <input type="text" id="procedureDescription" required placeholder="e.g. CT Abdomen with Contrast">
+        </div>
+        <div class="form-group">
+          <label>Requested Procedure ID</label>
+          <input type="text" id="requestedProcedureId" placeholder="Auto-generated if empty">
+        </div>
+        <div class="form-group">
+          <label>Study Instance UID</label>
+          <input type="text" id="studyInstanceUid" placeholder="Auto-generated if empty">
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">3</span> Scheduled Procedure Step</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Modality <span class="required">*</span></label>
+          <select id="modality" required>
+            <option value="">-- Select Modality --</option>
+            <option value="CR">CR - Computed Radiography</option>
+            <option value="CT">CT - Computed Tomography</option>
+            <option value="DX">DX - Digital Radiography</option>
+            <option value="ES">ES - Endoscopy</option>
+            <option value="MG">MG - Mammography</option>
+            <option value="MR">MR - Magnetic Resonance</option>
+            <option value="NM">NM - Nuclear Medicine</option>
+            <option value="OT">OT - Other</option>
+            <option value="PT">PT - PET</option>
+            <option value="RF">RF - Radiofluoroscopy</option>
+            <option value="SC">SC - Secondary Capture</option>
+            <option value="US">US - Ultrasound</option>
+            <option value="XA">XA - X-Ray Angiography</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Scheduled Station AE Title</label>
+          <input type="text" id="scheduledAet" value="DCM4CHEE" placeholder="e.g. DCM4CHEE">
+        </div>
+        <div class="form-group">
+          <label>Scheduled Date <span class="required">*</span></label>
+          <input type="date" id="scheduledDate" required>
+        </div>
+        <div class="form-group">
+          <label>Scheduled Time</label>
+          <input type="time" id="scheduledTime" value="09:00">
+        </div>
+        <div class="form-group">
+          <label>Performing Physician</label>
+          <input type="text" id="performingPhysician" placeholder="Last^First">
+        </div>
+        <div class="form-group">
+          <label>Scheduled Procedure Step ID</label>
+          <input type="text" id="spsId" placeholder="Auto-generated if empty">
+        </div>
+        <div class="form-group full-width">
+          <label>Scheduled Procedure Step Description</label>
+          <input type="text" id="spsDescription" placeholder="e.g. CT Abdomen">
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" onclick="resetForm()">Reset</button>
+        <button type="submit" class="btn btn-primary" id="submitBtn">Submit Order</button>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+
+<!-- ==================== TAB 2: UPLOAD DICOM ==================== -->
+<div class="tab-content" id="tab-upload">
+<div class="container" style="max-width:960px">
+
+  <!-- Step A: Select an order -->
+  <div class="card">
+    <div class="card-title"><span class="icon">A</span> Select MWL Order</div>
+    <div class="panel-header" style="margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#4a5568">Click a row to select the target order for your DICOM upload</span>
+      <button class="btn btn-sm btn-secondary" onclick="loadUploadOrders()">Refresh</button>
+    </div>
+    <div class="table-scroll" id="uploadOrdersWrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient</th>
+            <th>Patient ID</th>
+            <th>Accession #</th>
+            <th>Procedure</th>
+            <th>Modality</th>
+            <th>Sched. Date</th>
+            <th>Study UID</th>
+          </tr>
+        </thead>
+        <tbody id="uploadOrdersBody">
+          <tr><td colspan="7" class="loading-row">Click "Refresh" or switch to this tab...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Step B: Upload files -->
+  <div class="card" id="uploadCard">
+    <div class="card-title"><span class="icon">B</span> Upload DICOM Files</div>
+    <div id="selectedOrderInfo" style="font-size:0.85rem;margin-bottom:14px;padding:10px 14px;background:#fff3cd;border-radius:8px;color:#856404">
+      <strong>Select an order above first</strong>, then add files below.
+    </div>
+    <div style="margin-bottom:16px">
+      <button class="btn btn-primary btn-sm" id="createDicomBtn" onclick="createDicomFromOrder()" disabled style="opacity:0.5">Create Study in PACS from Order</button>
+      <span style="font-size:0.78rem;color:#718096;margin-left:10px" id="createDicomHint">Select an order first, then click to create a matching DICOM study in PACS</span>
+    </div>
+    <input type="file" id="dicomFileInput" multiple style="position:absolute;left:-9999px">
+    <div class="upload-zone" id="dropZone">
+      <div class="uz-icon">&#128193;</div>
+      <div class="uz-title">Drag & drop DICOM files here</div>
+      <div class="uz-sub">or click to browse &mdash; .dcm, .png, or any file</div>
+    </div>
+    <div class="file-list" id="fileList"></div>
+    <div class="progress-bar-wrap" id="progressWrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+    <div class="upload-summary" id="uploadSummary" style="display:none">
+      <div class="info" id="uploadInfo"></div>
+      <button class="btn btn-success" id="uploadBtn" onclick="uploadFiles()">Upload to PACS</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ==================== TAB 3: VIEW STUDIES ==================== -->
+<div class="tab-content" id="tab-studies">
+<div class="container">
+  <div class="card">
+    <div class="panel-header">
+      <h3>Studies in PACS</h3>
+      <button class="btn btn-sm btn-secondary" onclick="loadAllStudies()">Refresh</button>
+    </div>
+    <div class="table-scroll" style="max-height:600px">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient Name</th>
+            <th>Patient ID</th>
+            <th>Study Date</th>
+            <th>Description</th>
+            <th>Modality</th>
+            <th>Accession #</th>
+            <th># Series</th>
+            <th># Instances</th>
+            <th>OHIF</th>
+          </tr>
+        </thead>
+        <tbody id="allStudiesBody">
+          <tr><td colspan="9" class="loading-row">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ==================== TAB 4: WRITE REPORT ==================== -->
+<div class="tab-content" id="tab-report">
+<div class="container" style="max-width:960px">
+
+  <!-- Step: Select study/order -->
+  <div class="card" id="reportSelectCard">
+    <div class="card-title"><span class="icon">A</span> Select Study / Order</div>
+    <div class="panel-header" style="margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#4a5568">Click a study to pre-fill patient info for the report</span>
+      <button class="btn btn-sm btn-secondary" onclick="loadReportStudies()">Refresh</button>
+    </div>
+    <div class="table-scroll" style="max-height:240px">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Patient Name</th>
+            <th>Patient ID</th>
+            <th>Study Date</th>
+            <th>Description</th>
+            <th>Modality</th>
+            <th>Accession #</th>
+          </tr>
+        </thead>
+        <tbody id="reportStudiesBody">
+          <tr><td colspan="6" class="loading-row">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Report form -->
+  <div class="card" id="reportFormCard" style="border-top: 4px solid #3B4899;">
+    <!-- Print letterhead (visible only on print) -->
+    <div class="print-only" style="text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #3B4899">
+      <div style="font-size:1.8rem;font-weight:700;color:#3B4899;letter-spacing:-0.02em">LifeRhythem</div>
+      <div style="font-size:0.8rem;color:#7B82B5;font-style:italic">Citizen Wellness is our Priority</div>
+      <div style="font-size:1.1rem;font-weight:600;color:#3B4899;margin-top:10px;text-transform:uppercase;letter-spacing:0.08em">Radiology Report</div>
+    </div>
+
+    <div class="card-title"><span class="icon">B</span> Radiology Report</div>
+
+    <div class="report-header-grid" id="reportPatientInfo">
+      <div class="rh-item"><div class="rh-label">Patient Name</div><div class="rh-value" id="rptPatientName">-</div></div>
+      <div class="rh-item"><div class="rh-label">Patient ID</div><div class="rh-value" id="rptPatientId">-</div></div>
+      <div class="rh-item"><div class="rh-label">Date of Birth</div><div class="rh-value" id="rptDob">-</div></div>
+      <div class="rh-item"><div class="rh-label">Sex</div><div class="rh-value" id="rptSex">-</div></div>
+      <div class="rh-item"><div class="rh-label">Accession #</div><div class="rh-value" id="rptAccession">-</div></div>
+      <div class="rh-item"><div class="rh-label">Modality</div><div class="rh-value" id="rptModality">-</div></div>
+      <div class="rh-item"><div class="rh-label">Study Date</div><div class="rh-value" id="rptStudyDate">-</div></div>
+      <div class="rh-item"><div class="rh-label">Procedure</div><div class="rh-value" id="rptProcedure">-</div></div>
+      <div class="rh-item"><div class="rh-label">Referring Physician</div><div class="rh-value" id="rptReferring">-</div></div>
+    </div>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Radiologist Name <span class="required">*</span></label>
+        <input type="text" id="rptRadiologist" placeholder="Dr. Last^First">
+      </div>
+      <div class="form-group">
+        <label>Report Date</label>
+        <input type="date" id="rptDate">
+      </div>
+    </div>
+
+    <div class="report-section-label">Clinical History</div>
+    <textarea id="rptHistory" rows="2" placeholder="Brief clinical history or indication for study..."></textarea>
+
+    <div class="report-section-label">Technique</div>
+    <textarea id="rptTechnique" rows="2" placeholder="Imaging technique, contrast used, etc..."></textarea>
+
+    <div class="report-section-label">Findings <span style="color:#e53e3e">*</span></div>
+    <textarea id="rptFindings" rows="8" placeholder="Describe observations from the imaging study..."></textarea>
+
+    <div class="report-section-label">Impression / Conclusion <span style="color:#e53e3e">*</span></div>
+    <textarea id="rptImpression" rows="4" placeholder="Summary diagnosis / conclusion..."></textarea>
+
+    <div class="report-section-label">Recommendation</div>
+    <textarea id="rptRecommendation" rows="2" placeholder="Follow-up recommendations if any..."></textarea>
+
+    <!-- Print-only signature area -->
+    <div class="print-only" style="margin-top:40px;display:flex;justify-content:space-between;align-items:flex-end">
+      <div>
+        <div style="font-size:0.78rem;color:#718096">Report Date: <span id="rptDatePrint"></span></div>
+      </div>
+      <div style="text-align:center">
+        <div style="border-top:1px solid #1a1a2e;width:200px;padding-top:6px;font-size:0.82rem;font-weight:600" id="rptRadiologistPrint"></div>
+        <div style="font-size:0.72rem;color:#718096">Reporting Radiologist</div>
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:18px">
+      <button type="button" class="btn-outline" onclick="printReport()">Print / PDF</button>
+      <button type="button" class="btn btn-secondary" onclick="clearReport()">Clear</button>
+      <button type="button" class="btn btn-primary" id="saveReportBtn" onclick="saveReport()">Save Report</button>
+      <button type="button" class="btn btn-success" id="sendBahmniBtn" onclick="sendReportToBahmniManual()" title="Generate PDF and send to Bahmni independently">Send to Bahmni</button>
+    </div>
+  </div>
+
+  <!-- Saved Reports -->
+  <div class="card">
+    <div class="panel-header">
+      <h3>Saved Reports</h3>
+      <button class="btn btn-sm btn-secondary" onclick="loadSavedReports()">Refresh</button>
+    </div>
+    <div class="saved-reports-list" id="savedReportsList">
+      <div class="empty-state">No reports yet.</div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* ===== HELPERS ===== */
+  function dv(obj, tag) {
+    if (!obj || !obj[tag] || !obj[tag].Value) return '';
+    const v = obj[tag].Value[0];
+    if (typeof v === 'object' && v.Alphabetic) return v.Alphabetic;
+    return v;
+  }
+  function dd(d) {
+    if (!d || d.length < 8) return d || '';
+    return d.substring(0,4)+'-'+d.substring(4,6)+'-'+d.substring(6,8);
+  }
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast ' + type + ' show';
+    setTimeout(() => t.classList.remove('show'), 5000);
+  }
+  function genUID() { return '1.2.826.0.1.3680043.8.498.' + Date.now() + '.' + Math.floor(Math.random()*1e9); }
+  function genId(p) { return p + '-' + Date.now().toString(36).toUpperCase(); }
+  function fmtDate(s) { return s ? s.replace(/-/g,'') : ''; }
+  function fmtTime(s) { return s ? s.replace(/:/g,'')+'00' : ''; }
+  function fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+    return (b/1048576).toFixed(1) + ' MB';
+  }
+
+  /* ===== TABS ===== */
+  const tabNames = ['create','upload','studies','report'];
+  function switchTab(name) {
+    document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', tabNames[i]===name));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-'+name).classList.add('active');
+    if (name === 'upload') loadUploadOrders();
+    if (name === 'studies') loadAllStudies();
+    if (name === 'report') { loadReportStudies(); loadSavedReports(); }
+  }
+
+  /* ===== TAB 1: CREATE ORDER ===== */
+  document.getElementById('scheduledDate').valueAsDate = new Date();
+  function resetForm() {
+    document.getElementById('mwlForm').reset();
+    document.getElementById('scheduledDate').valueAsDate = new Date();
+    document.getElementById('scheduledTime').value = '09:00';
+    document.getElementById('scheduledAet').value = 'DCM4CHEE';
+  }
+  function buildDicomJson() {
+    const pid = document.getElementById('patientId').value.trim();
+    const pname = document.getElementById('patientName').value.trim();
+    const pdob = fmtDate(document.getElementById('patientDob').value);
+    const psex = document.getElementById('patientSex').value;
+    const acc = document.getElementById('accessionNumber').value.trim();
+    const ref = document.getElementById('referringPhysician').value.trim();
+    const pdesc = document.getElementById('procedureDescription').value.trim();
+    const rpid = document.getElementById('requestedProcedureId').value.trim() || genId('RP');
+    const suid = document.getElementById('studyInstanceUid').value.trim() || genUID();
+    const mod = document.getElementById('modality').value;
+    const aet = document.getElementById('scheduledAet').value.trim() || 'DCM4CHEE';
+    const sdate = fmtDate(document.getElementById('scheduledDate').value);
+    const stime = fmtTime(document.getElementById('scheduledTime').value);
+    const perf = document.getElementById('performingPhysician').value.trim();
+    const spsid = document.getElementById('spsId').value.trim() || genId('SPS');
+    const spsdesc = document.getElementById('spsDescription').value.trim() || pdesc;
+
+    const sps = {
+      "00080060":{"vr":"CS","Value":[mod]},
+      "00400001":{"vr":"AE","Value":[aet]},
+      "00400002":{"vr":"DA","Value":[sdate]},
+      "00400007":{"vr":"LO","Value":[spsdesc]},
+      "00400009":{"vr":"SH","Value":[spsid]},
+      "00400020":{"vr":"CS","Value":["SCHEDULED"]}
+    };
+    if (stime) sps["00400003"] = {"vr":"TM","Value":[stime]};
+    if (perf) sps["00400006"] = {"vr":"PN","Value":[{"Alphabetic":perf}]};
+
+    const d = {
+      "00080050":{"vr":"SH","Value":[acc]},
+      "00100010":{"vr":"PN","Value":[{"Alphabetic":pname}]},
+      "00100020":{"vr":"LO","Value":[pid]},
+      "0020000D":{"vr":"UI","Value":[suid]},
+      "00321060":{"vr":"LO","Value":[pdesc]},
+      "00401001":{"vr":"SH","Value":[rpid]},
+      "00400100":{"vr":"SQ","Value":[sps]}
+    };
+    if (pdob) d["00100030"] = {"vr":"DA","Value":[pdob]};
+    if (psex) d["00100040"] = {"vr":"CS","Value":[psex]};
+    if (ref) d["00080090"] = {"vr":"PN","Value":[{"Alphabetic":ref}]};
+    return d;
+  }
+
+  document.getElementById('mwlForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Sending...';
     try {
-      const filename = 'RadiologyReport_' + (report.accessionNumber || 'unknown').replace(/[^a-zA-Z0-9-_]/g, '') + '.pdf';
-      documentPath = await uploadDocumentToBahmni(pdfBuffer, patientUuid, filename);
-      console.log('Document uploaded to Bahmni, path:', documentPath);
-    } catch (uploadErr) {
-      console.warn('PDF upload to Bahmni failed (continuing without attachment):', uploadErr.message);
+      const res = await fetch('/api/mwl', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(buildDicomJson()),
+      });
+      if (res.ok) { showToast('MWL order created successfully!','success'); resetForm(); }
+      else { const err = await res.json().catch(()=>({})); showToast('Error: '+(err.error||res.statusText),'error'); }
+    } catch(err) { showToast('Network error: '+err.message,'error'); }
+    finally { btn.disabled = false; btn.textContent = 'Submit Order'; }
+  });
+
+  /* ===== TAB 2: UPLOAD DICOM ===== */
+  let uploadOrders = [];
+  let selectedUploadOrder = null;
+  let pendingFiles = [];
+
+  async function loadUploadOrders() {
+    const tbody = document.getElementById('uploadOrdersBody');
+    tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Loading orders...</td></tr>';
+    try {
+      const res = await fetch('/api/mwl');
+      const data = await res.json();
+      uploadOrders = Array.isArray(data) ? data : [];
+      renderUploadOrders();
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="7" class="loading-row">Failed to load.</td></tr>';
+    }
+  }
+
+  function renderUploadOrders() {
+    const tbody = document.getElementById('uploadOrdersBody');
+    if (!uploadOrders.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No MWL orders. Create one first.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = uploadOrders.map((o,i) => {
+      const sps = (o['00400100']&&o['00400100'].Value&&o['00400100'].Value[0]) || {};
+      const uid = dv(o,'0020000D');
+      const shortUid = uid.length > 30 ? '...' + uid.slice(-24) : uid;
+      return `<tr class="${i===selectedUploadOrder?'selected':''}" onclick="pickOrder(${i})">
+        <td title="${dv(o,'00100010')}">${dv(o,'00100010')}</td>
+        <td>${dv(o,'00100020')}</td>
+        <td><span class="badge badge-blue">${dv(o,'00080050')}</span></td>
+        <td title="${dv(o,'00321060')}">${dv(o,'00321060')}</td>
+        <td><span class="badge badge-gray">${dv(sps,'00080060')}</span></td>
+        <td>${dd(dv(sps,'00400002'))}</td>
+        <td title="${uid}" style="font-size:0.72rem;color:#718096">${shortUid}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function pickOrder(i) {
+    selectedUploadOrder = i;
+    renderUploadOrders();
+    const o = uploadOrders[i];
+    const el = document.getElementById('selectedOrderInfo');
+    el.style.background = '#d1fae5';
+    el.style.color = '#065f46';
+    el.innerHTML =
+      'Uploading to: <strong>' + dv(o,'00100010') + '</strong> &mdash; ' +
+      '<span class="badge badge-blue">' + dv(o,'00080050') + '</span> &mdash; ' +
+      dv(o,'00321060');
+    // Enable create DICOM button
+    const cdBtn = document.getElementById('createDicomBtn');
+    cdBtn.disabled = false; cdBtn.style.opacity = '1';
+    document.getElementById('createDicomHint').textContent = 'Creates a DICOM study in PACS with matching patient details from selected order';
+  }
+
+  async function createDicomFromOrder() {
+    if (selectedUploadOrder === null) { showToast('Select an order first.', 'error'); return; }
+    const order = uploadOrders[selectedUploadOrder];
+    const btn = document.getElementById('createDicomBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Creating...';
+    try {
+      const res = await fetch('/api/create-dicom-from-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(order),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast('Study created in PACS! Patient details match the order.', 'success');
+        document.getElementById('createDicomHint').innerHTML = '<span style="color:#065f46">Study created successfully &mdash; you can now upload additional DICOM files to this study.</span>';
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch(err) {
+      showToast('Network error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Create Study in PACS from Order';
+    }
+  }
+
+  // File handling
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('dicomFileInput');
+
+  dropZone.addEventListener('click', function(e) {
+    e.preventDefault();
+    fileInput.click();
+  });
+  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover'); });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files && fileInput.files.length) addFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  function addFiles(filesList) {
+    for (const f of filesList) pendingFiles.push(f);
+    renderFileList();
+  }
+
+  function removeFile(i) {
+    pendingFiles.splice(i, 1);
+    renderFileList();
+  }
+
+  function renderFileList() {
+    const el = document.getElementById('fileList');
+    const summary = document.getElementById('uploadSummary');
+    const info = document.getElementById('uploadInfo');
+    if (!pendingFiles.length) {
+      el.innerHTML = ''; summary.style.display = 'none'; return;
+    }
+    el.innerHTML = pendingFiles.map((f,i) =>
+      `<div class="file-item">
+        <span class="fi-name">${f.name}</span>
+        <span class="fi-size">${fmtSize(f.size)}</span>
+        <button class="fi-remove" onclick="removeFile(${i})">X</button>
+      </div>`
+    ).join('');
+    const total = pendingFiles.reduce((a,f) => a+f.size, 0);
+    info.innerHTML = '<strong>' + pendingFiles.length + '</strong> file(s) &mdash; ' + fmtSize(total);
+    summary.style.display = 'flex';
+  }
+
+  async function uploadFiles() {
+    if (selectedUploadOrder === null) { showToast('Please select an order first!', 'error'); return; }
+    if (!pendingFiles.length) { showToast('No files added yet.', 'error'); return; }
+
+    const order = uploadOrders[selectedUploadOrder];
+    const studyUID = dv(order, '0020000D');
+
+    const btn = document.getElementById('uploadBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Uploading...';
+
+    const progWrap = document.getElementById('progressWrap');
+    const progBar = document.getElementById('progressBar');
+    progWrap.classList.add('active');
+    progBar.style.width = '10%';
+
+    const formData = new FormData();
+    formData.append('studyInstanceUID', studyUID);
+    for (const f of pendingFiles) {
+      formData.append('dicomFiles', f);
     }
 
-    // Step 4: Update latest radiology fulfillment observations (so it shows at -1)
-    const radiologyNotes = [
-      report.findings ? 'Findings: ' + report.findings : '',
-      report.impression ? 'Impression: ' + report.impression : '',
-      report.recommendation ? 'Recommendation: ' + report.recommendation : '',
-    ].filter(Boolean).join('\n\n');
-
-    let updateResult = null;
     try {
-      updateResult = await updateLatestRadiologyFulfillment(
-        patientUuid,
-        orderUuid,
-        orderTypeUuid,
-        radiologyNotes,
-        documentPath
-      );
-      console.log('=== Radiology fulfillment updated successfully ===');
-    } catch (updateErr) {
-      // If there are no prior fulfillment observations for this order,
-      // create initial observations so the patient dashboard can show at -1.
-      const msg = String(updateErr?.message || updateErr);
-      if (msg.includes('No bahmniObservations found for orderUuid=')) {
-        console.warn('No fulfillment observations yet; creating notes-only fulfillment for orderUuid=' + orderUuid);
-        const created = await createBahmniRadiologyFulfillmentNotesOnly(patientUuid, orderUuid, radiologyNotes);
-        res.json({
-          message: 'Report sent to Bahmni successfully (notes-only created)',
-          patientUuid,
-          orderUuid,
-          orderTypeUuid,
-          documentPath,
-          createdBahmni: true,
-          notesCreated: true,
-          notesOnly: true,
-          encounterUuid: created.encounterUuid || created.uuid,
-        });
+      progBar.style.width = '40%';
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      progBar.style.width = '90%';
+
+      if (res.ok) {
+        progBar.style.width = '100%';
+        showToast('Upload successful! ' + pendingFiles.length + ' file(s) stored in PACS.', 'success');
+        pendingFiles = [];
+        renderFileList();
+        setTimeout(() => { progWrap.classList.remove('active'); progBar.style.width = '0%'; }, 1500);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Upload error: ' + (err.error || res.statusText), 'error');
+        progWrap.classList.remove('active');
+      }
+    } catch(err) {
+      showToast('Network error: ' + err.message, 'error');
+      progWrap.classList.remove('active');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Upload to PACS';
+    }
+  }
+
+  /* ===== TAB 3: VIEW STUDIES ===== */
+  async function loadAllStudies() {
+    const tbody = document.getElementById('allStudiesBody');
+    tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Loading studies...</td></tr>';
+    try {
+      const res = await fetch('/api/studies');
+      const data = await res.json();
+      const studies = Array.isArray(data) ? data : [];
+      if (!studies.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No studies in PACS yet.</td></tr>';
         return;
       }
-      throw updateErr;
+      tbody.innerHTML = studies.map(s => {
+        const mods = dv(s,'00080061') || dv(s,'00080060');
+        const studyUid = dv(s,'0020000D');
+        const ohifUrl = 'http://178.236.185.39:3005/viewer?StudyInstanceUIDs=' + encodeURIComponent(studyUid);
+        return `<tr>
+          <td title="${dv(s,'00100010')}">${dv(s,'00100010')}</td>
+          <td>${dv(s,'00100020')}</td>
+          <td>${dd(dv(s,'00080020'))}</td>
+          <td title="${dv(s,'00081030')}">${dv(s,'00081030') || '-'}</td>
+          <td><span class="badge badge-gray">${mods}</span></td>
+          <td>${dv(s,'00080050') ? '<span class="badge badge-green">'+dv(s,'00080050')+'</span>' : '<span style="color:#a0aec0">-</span>'}</td>
+          <td>${dv(s,'00201206') || '-'}</td>
+          <td>${dv(s,'00201208') || '-'}</td>
+          <td><a href="${ohifUrl}" target="_blank" class="btn btn-sm btn-primary" style="padding:4px 12px;font-size:0.72rem;text-decoration:none;display:inline-block">View</a></td>
+        </tr>`;
+      }).join('');
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="9" class="loading-row">Failed to load studies.</td></tr>';
     }
-
-    res.json({
-      message: 'Report sent to Bahmni successfully',
-      patientUuid,
-      orderUuid,
-      orderTypeUuid,
-      documentPath,
-      imagesUpdated: updateResult.imagesUpdated,
-      notesObsUuid: updateResult.updatedNotes?.uuid,
-      imagesObsUuid: updateResult.updatedImages?.uuid || null,
-    });
-  } catch (err) {
-    console.error('Send to Bahmni error:', err.message);
-    res.status(500).json({ error: err.message });
   }
-});
+  /* ===== TAB 4: WRITE REPORT ===== */
+  let reportStudies = [];
+  let selectedReportStudy = null;
+  let reportOrderData = null;
 
-// ─── DOWNLOAD REPORT AS PDF ───
-app.get('/api/reports/:id/pdf', async (req, res) => {
-  try {
-    const filepath = path.join(REPORTS_DIR, req.params.id + '.json');
-    if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'Report not found' });
-    const report = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
-    const pdfBuffer = await generateReportPDF(report);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="' + req.params.id + '.pdf"');
-    res.send(pdfBuffer);
-  } catch (err) {
-    console.error('PDF generation error:', err.message);
-    res.status(500).json({ error: err.message });
+  document.getElementById('rptDate').valueAsDate = new Date();
+
+  async function loadReportStudies() {
+    const tbody = document.getElementById('reportStudiesBody');
+    tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Loading...</td></tr>';
+    try {
+      // Load both studies and MWL orders to merge info
+      const [studiesRes, mwlRes] = await Promise.all([fetch('/api/studies'), fetch('/api/mwl')]);
+      const studies = await studiesRes.json().then(d => Array.isArray(d) ? d : []);
+      const orders = await mwlRes.json().then(d => Array.isArray(d) ? d : []);
+
+      // Build a combined list: prefer studies, enrich with order info
+      reportStudies = studies.map(s => {
+        const acc = dv(s, '00080050');
+        const matchOrder = orders.find(o => dv(o, '00080050') === acc);
+        return { study: s, order: matchOrder || null };
+      });
+
+      // Also add orders that have no matching study yet
+      for (const o of orders) {
+        const acc = dv(o, '00080050');
+        if (!studies.find(s => dv(s, '00080050') === acc)) {
+          reportStudies.push({ study: null, order: o });
+        }
+      }
+
+      renderReportStudies();
+    } catch(err) {
+      tbody.innerHTML = '<tr><td colspan="6" class="loading-row">Failed to load.</td></tr>';
+    }
   }
-});
 
-app.listen(PORT, () => {
-  console.log(`MWL Order App running at http://localhost:${PORT}`);
-});
+  function renderReportStudies() {
+    const tbody = document.getElementById('reportStudiesBody');
+    if (!reportStudies.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No studies or orders found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = reportStudies.map((item, i) => {
+      const src = item.study || item.order;
+      const sps = (src['00400100'] && src['00400100'].Value && src['00400100'].Value[0]) || {};
+      const mod = dv(src, '00080061') || dv(src, '00080060') || dv(sps, '00080060');
+      const studyDate = dv(src, '00080020') || dv(sps, '00400002');
+      const desc = dv(src, '00081030') || dv(src, '00321060');
+      return `<tr class="${i === selectedReportStudy ? 'selected' : ''}" onclick="pickReportStudy(${i})">
+        <td>${dv(src, '00100010')}</td>
+        <td>${dv(src, '00100020')}</td>
+        <td>${dd(studyDate)}</td>
+        <td title="${desc}">${desc || '-'}</td>
+        <td><span class="badge badge-gray">${mod}</span></td>
+        <td>${dv(src, '00080050') ? '<span class="badge badge-blue">' + dv(src, '00080050') + '</span>' : '-'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function pickReportStudy(i) {
+    selectedReportStudy = i;
+    renderReportStudies();
+    const item = reportStudies[i];
+    const src = item.study || item.order;
+    const order = item.order;
+    const sps = (src['00400100'] && src['00400100'].Value && src['00400100'].Value[0]) || {};
+
+    reportOrderData = { src, order, sps };
+
+    document.getElementById('rptPatientName').textContent = dv(src, '00100010') || '-';
+    document.getElementById('rptPatientId').textContent = dv(src, '00100020') || '-';
+    document.getElementById('rptDob').textContent = dd(dv(src, '00100030')) || '-';
+    document.getElementById('rptSex').textContent = dv(src, '00100040') || '-';
+    document.getElementById('rptAccession').textContent = dv(src, '00080050') || '-';
+    document.getElementById('rptModality').textContent = dv(src, '00080061') || dv(src, '00080060') || dv(sps, '00080060') || '-';
+    document.getElementById('rptStudyDate').textContent = dd(dv(src, '00080020') || dv(sps, '00400002')) || '-';
+    document.getElementById('rptProcedure').textContent = dv(src, '00081030') || dv(src, '00321060') || (order ? dv(order, '00321060') : '') || '-';
+    document.getElementById('rptReferring').textContent = dv(src, '00080090') || (order ? dv(order, '00080090') : '') || '-';
+  }
+
+  function clearReport() {
+    document.getElementById('rptRadiologist').value = '';
+    document.getElementById('rptDate').valueAsDate = new Date();
+    document.getElementById('rptHistory').value = '';
+    document.getElementById('rptTechnique').value = '';
+    document.getElementById('rptFindings').value = '';
+    document.getElementById('rptImpression').value = '';
+    document.getElementById('rptRecommendation').value = '';
+  }
+
+  function buildReportData() {
+    return {
+      patientName: document.getElementById('rptPatientName').textContent,
+      patientId: document.getElementById('rptPatientId').textContent,
+      dob: document.getElementById('rptDob').textContent,
+      sex: document.getElementById('rptSex').textContent,
+      accessionNumber: document.getElementById('rptAccession').textContent,
+      modality: document.getElementById('rptModality').textContent,
+      studyDate: document.getElementById('rptStudyDate').textContent,
+      procedure: document.getElementById('rptProcedure').textContent,
+      referringPhysician: document.getElementById('rptReferring').textContent,
+      radiologist: document.getElementById('rptRadiologist').value.trim(),
+      reportDate: document.getElementById('rptDate').value,
+      clinicalHistory: document.getElementById('rptHistory').value.trim(),
+      technique: document.getElementById('rptTechnique').value.trim(),
+      findings: document.getElementById('rptFindings').value.trim(),
+      impression: document.getElementById('rptImpression').value.trim(),
+      recommendation: document.getElementById('rptRecommendation').value.trim(),
+    };
+  }
+
+  function validateReport(report) {
+    if (!report.radiologist) { showToast('Please enter radiologist name.', 'error'); return false; }
+    if (!report.findings) { showToast('Findings cannot be empty.', 'error'); return false; }
+    if (!report.impression) { showToast('Impression / Conclusion cannot be empty.', 'error'); return false; }
+    return true;
+  }
+
+  async function sendReportToBahmni(report) {
+    const bahmniBtn = document.getElementById('sendBahmniBtn');
+    bahmniBtn.disabled = true;
+    bahmniBtn.innerHTML = '<span class="spinner"></span> Sending to Bahmni...';
+    try {
+      const res = await fetch('/api/send-report-to-bahmni', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(report),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast('Report sent to Bahmni! Encounter: ' + (data.encounterUuid || 'created'), 'success');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Bahmni error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch (err) {
+      showToast('Bahmni send error: ' + err.message, 'error');
+    } finally {
+      bahmniBtn.disabled = false;
+      bahmniBtn.textContent = 'Send to Bahmni';
+    }
+  }
+
+  async function sendReportToBahmniManual() {
+    const report = buildReportData();
+    if (!validateReport(report)) return;
+    await sendReportToBahmni(report);
+  }
+
+  async function saveReport() {
+    const report = buildReportData();
+    if (!validateReport(report)) return;
+
+    const btn = document.getElementById('saveReportBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Saving...';
+
+    // Fire Bahmni send independently (does not block local save)
+    sendReportToBahmni(report);
+
+    try {
+      const res = await fetch('/api/reports', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(report),
+      });
+      if (res.ok) {
+        showToast('Report saved successfully!', 'success');
+        clearReport();
+        loadSavedReports();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast('Error: ' + (err.error || res.statusText), 'error');
+      }
+    } catch (err) {
+      showToast('Network error: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Save Report';
+    }
+  }
+
+  async function loadSavedReports() {
+    const el = document.getElementById('savedReportsList');
+    el.innerHTML = '<div class="loading-row">Loading...</div>';
+    try {
+      const res = await fetch('/api/reports');
+      const reports = await res.json();
+      if (!reports.length) {
+        el.innerHTML = '<div class="empty-state">No reports saved yet.</div>';
+        return;
+      }
+      el.innerHTML = reports.map(r => `
+        <div class="saved-report-item" onclick="viewReport('${r.reportId}')">
+          <div>
+            <div class="sr-patient">${r.patientName} <span class="badge badge-blue">${r.accessionNumber || ''}</span></div>
+            <div class="sr-meta">${r.procedure || '-'} &mdash; ${r.modality || ''} &mdash; Radiologist: ${r.radiologist}</div>
+          </div>
+          <div class="sr-date">${r.reportDate || ''}<br>${r.reportId}</div>
+        </div>
+      `).join('');
+    } catch(err) {
+      el.innerHTML = '<div class="empty-state">Failed to load reports.</div>';
+    }
+  }
+
+  async function viewReport(id) {
+    try {
+      const res = await fetch('/api/reports/' + id);
+      const r = await res.json();
+      // Populate the form with saved report data for viewing
+      document.getElementById('rptPatientName').textContent = r.patientName || '-';
+      document.getElementById('rptPatientId').textContent = r.patientId || '-';
+      document.getElementById('rptDob').textContent = r.dob || '-';
+      document.getElementById('rptSex').textContent = r.sex || '-';
+      document.getElementById('rptAccession').textContent = r.accessionNumber || '-';
+      document.getElementById('rptModality').textContent = r.modality || '-';
+      document.getElementById('rptStudyDate').textContent = r.studyDate || '-';
+      document.getElementById('rptProcedure').textContent = r.procedure || '-';
+      document.getElementById('rptReferring').textContent = r.referringPhysician || '-';
+      document.getElementById('rptRadiologist').value = r.radiologist || '';
+      document.getElementById('rptDate').value = r.reportDate || '';
+      document.getElementById('rptHistory').value = r.clinicalHistory || '';
+      document.getElementById('rptTechnique').value = r.technique || '';
+      document.getElementById('rptFindings').value = r.findings || '';
+      document.getElementById('rptImpression').value = r.impression || '';
+      document.getElementById('rptRecommendation').value = r.recommendation || '';
+      // Scroll to report form
+      document.getElementById('reportFormCard').scrollIntoView({ behavior: 'smooth' });
+    } catch(err) {
+      showToast('Failed to load report.', 'error');
+    }
+  }
+
+  // function printReport() {
+  //   // Populate print-only fields
+  //   document.getElementById('rptRadiologistPrint').textContent = document.getElementById('rptRadiologist').value || '';
+  //   document.getElementById('rptDatePrint').textContent = document.getElementById('rptDate').value || '';
+  //   window.print();
+  // }
+
+
+  function printReport() {
+    // Get all the report data from the form
+    const reportData = {
+        patientName: document.getElementById('rptPatientName').textContent,
+        patientId: document.getElementById('rptPatientId').textContent,
+        dob: document.getElementById('rptDob').textContent,
+        sex: document.getElementById('rptSex').textContent,
+        accessionNumber: document.getElementById('rptAccession').textContent,
+        modality: document.getElementById('rptModality').textContent,
+        studyDate: document.getElementById('rptStudyDate').textContent,
+        procedure: document.getElementById('rptProcedure').textContent,
+        referringPhysician: document.getElementById('rptReferring').textContent,
+        radiologist: document.getElementById('rptRadiologist').value || '',
+        reportDate: document.getElementById('rptDate').value || new Date().toISOString().split('T')[0],
+        clinicalHistory: document.getElementById('rptHistory').value,
+        technique: document.getElementById('rptTechnique').value,
+        findings: document.getElementById('rptFindings').value,
+        impression: document.getElementById('rptImpression').value,
+        recommendation: document.getElementById('rptRecommendation').value
+    };
+    
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank', 'width=800,height=600,toolbar=no,menubar=no,scrollbars=yes');
+    
+    // Write the HTML content - split the script tag to avoid termination
+    printWindow.document.write('<!DOCTYPE html>\n');
+    printWindow.document.write('<html>\n');
+    printWindow.document.write('<head>\n');
+    printWindow.document.write('<title>Radiology Report - ' + escapeHtml(reportData.patientName) + '</title>\n');
+    printWindow.document.write('<meta charset="UTF-8">\n');
+    printWindow.document.write('<style>\n');
+    printWindow.document.write(`
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+                
+                body {
+                    font-family: 'Inter', 'Helvetica', Arial, sans-serif;
+                    margin: 0;
+                    padding: 40px;
+                    background: white;
+                    color: #1a1a2e;
+                }
+                
+                .report-container {
+                    max-width: 1100px;
+                    margin: 0 auto;
+                    background: white;
+                }
+                
+                .header {
+                    text-align: center;
+                    margin-bottom: 30px;
+                }
+                
+                .header h1 {
+                    color: #3B4899;
+                    font-size: 28px;
+                    margin-bottom: 5px;
+                    font-weight: 700;
+                }
+                
+                .header .subtitle {
+                    color: #7B82B5;
+                    font-size: 11px;
+                    margin-bottom: 15px;
+                }
+                
+                .report-title {
+                    color: #2C3E66;
+                    font-size: 20px;
+                    font-weight: bold;
+                    margin: 20px 0 10px;
+                }
+                
+                .divider {
+                    border-top: 2px solid #3B4899;
+                    width: 80%;
+                    margin: 10px auto;
+                }
+                
+                .patient-card {
+                    background: #F8F9FC;
+                    border: 1px solid #E4E7F0;
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin: 20px 0;
+                }
+                
+                .patient-card h3 {
+                    color: #3B4899;
+                    font-size: 14px;
+                    margin-bottom: 15px;
+                    font-weight: 600;
+                }
+                
+                .info-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 15px;
+                }
+                
+                .info-row {
+                    display: flex;
+                    align-items: baseline;
+                }
+                
+                .info-label {
+                    font-weight: bold;
+                    color: #4A5568;
+                    font-size: 10px;
+                    min-width: 120px;
+                }
+                
+                .info-value {
+                    color: #1A202C;
+                    font-size: 11px;
+                    font-weight: normal;
+                }
+                
+                .section {
+                    margin: 25px 0;
+                }
+                
+                .section-title {
+                    color: #3B4899;
+                    font-size: 14px;
+                    font-weight: bold;
+                    margin-bottom: 10px;
+                    border-bottom: 1px solid #E2E8F0;
+                    padding-bottom: 5px;
+                }
+                
+                .section-content {
+                    color: #2D3748;
+                    font-size: 11px;
+                    line-height: 1.5;
+                    margin-top: 10px;
+                    white-space: pre-wrap;
+                }
+                
+                .signature-area {
+                    margin-top: 50px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-end;
+                }
+                
+                .signature-line {
+                    border-top: 1px solid #2D3748;
+                    width: 250px;
+                    margin-top: 30px;
+                    padding-top: 8px;
+                    text-align: center;
+                }
+                
+                .signature-name {
+                    font-weight: bold;
+                    font-size: 11px;
+                }
+                
+                .signature-title {
+                    font-size: 9px;
+                    color: #718096;
+                }
+                
+                .report-date {
+                    font-size: 9px;
+                    color: #4A5568;
+                }
+                
+                .footer-note {
+                    margin-top: 40px;
+                    text-align: center;
+                    font-size: 8px;
+                    color: #A0AEC0;
+                    font-style: italic;
+                }
+                
+                @media print {
+                    body {
+                        padding: 0;
+                        margin: 0;
+                    }
+                    .report-container {
+                        margin: 0;
+                        padding: 20px;
+                    }
+                    .patient-card {
+                        break-inside: avoid;
+                    }
+                    .section {
+                        break-inside: avoid;
+                    }
+                }
+            </style>\n`);
+    printWindow.document.write('</head>\n');
+    printWindow.document.write('<body>\n');
+    printWindow.document.write(`
+            <div class="report-container">
+                <div class="header">
+                    <h1>LifeRhythem</h1>
+                    <div class="subtitle">Citizen Wellness is our Priority</div>
+                    <div class="report-title">RADIOLOGY REPORT</div>
+                    <div class="divider"></div>
+                </div>
+                
+                <div class="patient-card">
+                    <h3>PATIENT INFORMATION</h3>
+                    <div class="info-grid">
+                        <div class="info-row">
+                            <span class="info-label">Patient Name:</span>
+                            <span class="info-value">${escapeHtml(reportData.patientName) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Patient ID:</span>
+                            <span class="info-value">${escapeHtml(reportData.patientId) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Date of Birth:</span>
+                            <span class="info-value">${escapeHtml(reportData.dob) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Sex:</span>
+                            <span class="info-value">${escapeHtml(reportData.sex) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Accession #:</span>
+                            <span class="info-value">${escapeHtml(reportData.accessionNumber) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Modality:</span>
+                            <span class="info-value">${escapeHtml(reportData.modality) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Study Date:</span>
+                            <span class="info-value">${escapeHtml(reportData.studyDate) || '—'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Referring Physician:</span>
+                            <span class="info-value">${escapeHtml(reportData.referringPhysician) || '—'}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                ${reportData.procedure && reportData.procedure !== '-' ? `
+                <div class="section">
+                    <div class="section-title">📋 PROCEDURE DETAILS</div>
+                    <div class="section-content">${escapeHtml(reportData.procedure)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.clinicalHistory ? `
+                <div class="section">
+                    <div class="section-title">📝 CLINICAL HISTORY</div>
+                    <div class="section-content">${escapeHtml(reportData.clinicalHistory)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.technique ? `
+                <div class="section">
+                    <div class="section-title">🔬 TECHNIQUE</div>
+                    <div class="section-content">${escapeHtml(reportData.technique)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.findings ? `
+                <div class="section">
+                    <div class="section-title">🔍 FINDINGS</div>
+                    <div class="section-content">${escapeHtml(reportData.findings)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.impression ? `
+                <div class="section">
+                    <div class="section-title">💡 IMPRESSION / CONCLUSION</div>
+                    <div class="section-content">${escapeHtml(reportData.impression)}</div>
+                </div>
+                ` : ''}
+                
+                ${reportData.recommendation ? `
+                <div class="section">
+                    <div class="section-title">📌 RECOMMENDATION</div>
+                    <div class="section-content">${escapeHtml(reportData.recommendation)}</div>
+                </div>
+                ` : ''}
+                
+                <div class="signature-area">
+                    <div class="report-date">
+                        Report Date: ${escapeHtml(reportData.reportDate)}
+                    </div>
+                    <div class="signature-line">
+                        <div class="signature-name">${escapeHtml(reportData.radiologist) || '_________________________'}</div>
+                        <div class="signature-title">Reporting Radiologist</div>
+                    </div>
+                </div>
+                
+                <div class="footer-note">
+                    This is a computer-generated report. No signature is required for electronic distribution.
+                </div>
+            </div>
+    `);
+    
+    // Add the script separately to avoid template literal issues
+    printWindow.document.write('<scr' + 'ipt>\n');
+    printWindow.document.write('window.onload = function() { window.print(); };\n');
+    printWindow.document.write('</scr' + 'ipt>\n');
+    
+    printWindow.document.write('</body>\n');
+    printWindow.document.write('</html>\n');
+    printWindow.document.close();
+}
+
+// Helper function to prevent XSS and handle special characters
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+
+
+
+</script>
+</body>
+</html>
