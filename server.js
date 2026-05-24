@@ -6,6 +6,9 @@ const multer = require('multer');
 const crypto = require('crypto');
 const https = require('https');
 const PDFDocument = require('pdfkit');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR);
@@ -951,6 +954,71 @@ app.get('/api/reports/:id/pdf', async (req, res) => {
     res.send(pdfBuffer);
   } catch (err) {
     console.error('PDF generation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── VOICE-TO-ORDER: audio → Gemini → structured DICOM fields ───
+const REPORT_VOICE_PROMPT = `You are a radiology report transcription assistant. A radiologist is dictating a report.
+First transcribe the audio exactly, then extract the following report sections.
+Return a JSON object (no markdown, no code blocks, raw JSON only) with this structure:
+{
+  "transcript": string,
+  "radiologist": string or null,
+  "clinicalHistory": string or null,
+  "technique": string or null,
+  "findings": string or null,
+  "impression": string or null,
+  "recommendation": string or null
+}
+Rules:
+- transcript: exact verbatim transcription of what was spoken
+- radiologist: the name of the reporting radiologist if stated (e.g. "This is Dr. Smith" → "Dr. Smith")
+- clinicalHistory: reason for the study, symptoms, clinical indication
+- technique: imaging sequences, contrast used, patient positioning, protocol details
+- findings: observations and measurements from the images
+- impression: summary diagnosis or conclusion
+- recommendation: follow-up advice or next steps
+- The radiologist may label sections explicitly ("Findings:") or speak naturally without labels — infer sections from context
+- CRITICAL: only extract what was clearly spoken — return null for any section not mentioned
+- CRITICAL: never guess, infer, or invent content; transcribe faithfully
+- Return ONLY the raw JSON object, no explanation, no markdown`;
+
+async function callGeminiWithAudio(mimeType, buffer) {
+  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  console.log(`Sending audio inline: ${mimeType}, ${buffer.length} bytes`);
+  const result = await model.generateContent([
+    { inlineData: { data: buffer.toString('base64'), mimeType } },
+    REPORT_VOICE_PROMPT,
+  ]);
+  return result.response.text().trim();
+}
+
+// ─── VOICE-TO-REPORT: radiologist dictates report → Gemini → fills report fields ───
+app.post('/api/voice-to-report', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
+    if (!GEMINI_API_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not configured on server' });
+
+    const mimeType = (req.file.mimetype || 'audio/webm').split(';')[0];
+    let text = await callGeminiWithAudio(mimeType, req.file.buffer);
+    text = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+
+    let fields;
+    try {
+      fields = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('Gemini JSON parse error:', parseErr.message, '| Raw:', text);
+      return res.status(500).json({ error: 'Failed to parse Gemini response', raw: text });
+    }
+
+    console.log('Report voice transcript:', fields.transcript || '(none)');
+    console.log('Report voice fields:', JSON.stringify(fields));
+    delete fields.transcript;
+    res.json(fields);
+  } catch (err) {
+    console.error('Voice-to-report error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

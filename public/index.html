@@ -254,6 +254,39 @@
       .container { padding: 0 12px; margin: 14px auto; }
       .tab-btn { padding: 10px 14px; font-size: 0.8rem; }
     }
+
+    /* Voice dictation (Tab 4 — Write Report) */
+    .btn-voice {
+      background: linear-gradient(135deg, #3B4899, #4F5AA8);
+      color: #fff; border: none; border-radius: 50px;
+      padding: 10px 26px; font-size: 0.88rem; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+      box-shadow: 0 4px 14px rgba(59,72,153,0.3);
+      transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 8px;
+    }
+    .btn-voice:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(59,72,153,0.4); }
+    .btn-voice:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+    .btn-voice.recording {
+      background: linear-gradient(135deg, #c53030, #e53e3e);
+      box-shadow: 0 4px 14px rgba(229,62,62,0.4);
+      animation: voicePulse 1.5s ease-in-out infinite;
+    }
+    @keyframes voicePulse {
+      0%, 100% { box-shadow: 0 4px 14px rgba(229,62,62,0.4); }
+      50% { box-shadow: 0 4px 28px rgba(229,62,62,0.7); }
+    }
+    .voice-status {
+      margin-top: 10px; font-size: 0.84rem; color: #3B4899;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .voice-dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #e53e3e;
+      animation: voiceDot 1s ease-in-out infinite;
+    }
+    @keyframes voiceDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
   </style>
 </head>
 <body>
@@ -278,6 +311,7 @@
 <!-- ==================== TAB 1: CREATE ORDER ==================== -->
 <div class="tab-content active" id="tab-create">
 <div class="container" style="max-width:820px">
+
   <form id="mwlForm">
     <div class="card">
       <div class="card-title"><span class="icon">1</span> Patient Information</div>
@@ -528,6 +562,18 @@
       <div class="rh-item"><div class="rh-label">Study Date</div><div class="rh-value" id="rptStudyDate">-</div></div>
       <div class="rh-item"><div class="rh-label">Procedure</div><div class="rh-value" id="rptProcedure">-</div></div>
       <div class="rh-item"><div class="rh-label">Referring Physician</div><div class="rh-value" id="rptReferring">-</div></div>
+    </div>
+
+    <div style="text-align:center;margin:0 0 18px;padding:14px;background:linear-gradient(135deg,#f0f1fa,#f7f8fc);border-radius:12px;border:1.5px solid #dde0f5">
+      <button type="button" id="voiceBtn" class="btn-voice" onclick="toggleRecording()">
+        <span id="voiceBtnIcon">🎤</span>
+        <span id="voiceBtnLabel">Dictate Report</span>
+      </button>
+      <div class="voice-status" id="voiceStatus" style="display:none">
+        <span class="voice-dot" id="voiceDot"></span>
+        <span id="voiceTimer">Recording... 0:00</span>
+      </div>
+      <div style="font-size:0.74rem;color:#718096;margin-top:6px">Speak naturally — findings, impression, history, technique, recommendation. Fields will be pre-filled for review.</div>
     </div>
 
     <div class="form-grid">
@@ -1476,7 +1522,109 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
+  /* ===== VOICE-TO-REPORT ===== */
+  let mediaRecorder = null;
+  let mediaStream = null;
+  let audioChunks = [];
+  let recordingTimer = null;
+  let recordingSeconds = 0;
+  let voiceRecording = false;
 
+  async function toggleRecording() {
+    if (voiceRecording) stopVoiceRecording();
+    else await startVoiceRecording();
+  }
+
+  async function startVoiceRecording() {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      const preferredType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+                          : MediaRecorder.isTypeSupported('audio/ogg')  ? 'audio/ogg'
+                          : '';
+      mediaRecorder = new MediaRecorder(mediaStream, preferredType ? { mimeType: preferredType } : {});
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.onstop = () => { mediaStream.getTracks().forEach(t => t.stop()); processVoiceAudio(); };
+      mediaRecorder.start(250);
+
+      voiceRecording = true;
+      recordingSeconds = 0;
+
+      const btn = document.getElementById('voiceBtn');
+      btn.classList.add('recording');
+      document.getElementById('voiceBtnIcon').textContent = '⏹';
+      document.getElementById('voiceBtnLabel').textContent = 'Stop & Process';
+      document.getElementById('voiceStatus').style.display = 'flex';
+      document.getElementById('voiceTimer').textContent = 'Recording... 0:00';
+
+      recordingTimer = setInterval(() => {
+        recordingSeconds++;
+        const m = Math.floor(recordingSeconds / 60);
+        const s = String(recordingSeconds % 60).padStart(2, '0');
+        const el = document.getElementById('voiceTimer');
+        if (el) el.textContent = `Recording... ${m}:${s}`;
+      }, 1000);
+    } catch (err) {
+      showToast('Microphone access denied: ' + err.message, 'error');
+    }
+  }
+
+  function stopVoiceRecording() {
+    clearInterval(recordingTimer);
+    voiceRecording = false;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    const btn = document.getElementById('voiceBtn');
+    btn.classList.remove('recording');
+    btn.disabled = true;
+    document.getElementById('voiceBtnIcon').textContent = '';
+    document.getElementById('voiceBtnLabel').innerHTML = '<span class="spinner"></span>Processing...';
+    document.getElementById('voiceDot').style.display = 'none';
+    document.getElementById('voiceTimer').textContent = 'Analysing your dictation...';
+  }
+
+  async function processVoiceAudio() {
+    const mimeType = (audioChunks[0] && audioChunks[0].type) || 'audio/webm';
+    const audioBlob = new Blob(audioChunks, { type: mimeType });
+    const ext = mimeType.includes('ogg') ? 'ogg' : 'webm';
+
+    if (audioBlob.size < 10000) {
+      showToast('Audio too short or mic not capturing — speak for at least 3 seconds.', 'error');
+      resetVoiceBtn();
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('audio', audioBlob, 'recording.' + ext);
+
+    try {
+      const res = await fetch('/api/voice-to-report', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok) { showToast('Voice error: ' + (data.error || res.statusText), 'error'); return; }
+      fillReportFromVoice(data);
+      showToast('Report filled from dictation — please review and save', 'success');
+    } catch (err) {
+      showToast('Voice error: ' + err.message, 'error');
+    } finally {
+      resetVoiceBtn();
+    }
+  }
+
+  function resetVoiceBtn() {
+    const btn = document.getElementById('voiceBtn');
+    btn.disabled = false;
+    document.getElementById('voiceBtnIcon').textContent = '🎤';
+    document.getElementById('voiceBtnLabel').textContent = 'Dictate Report';
+    document.getElementById('voiceStatus').style.display = 'none';
+  }
+
+  function fillReportFromVoice(f) {
+    if (f.radiologist)     document.getElementById('rptRadiologist').value = f.radiologist;
+    if (f.clinicalHistory) document.getElementById('rptHistory').value = f.clinicalHistory;
+    if (f.technique)       document.getElementById('rptTechnique').value = f.technique;
+    if (f.findings)        document.getElementById('rptFindings').value = f.findings;
+    if (f.impression)      document.getElementById('rptImpression').value = f.impression;
+    if (f.recommendation)  document.getElementById('rptRecommendation').value = f.recommendation;
+  }
 
 
 </script>
